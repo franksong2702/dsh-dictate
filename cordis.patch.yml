@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-voice-input
+      name: dsh-voice-input
+      config: {}
