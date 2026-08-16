@@ -21,9 +21,17 @@ export const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
 /** Browser-local Voice Input preferences. */
 export interface VoiceInputPrefs {
   readonly lang: string
+  readonly modelPolishEnabled: boolean
+  readonly selectedModel: string
+  readonly autoSendEnabled: boolean
 }
 
-export const DEFAULT_PREFS: VoiceInputPrefs = { lang: 'zh-CN' }
+export const DEFAULT_PREFS: VoiceInputPrefs = {
+  lang: 'zh-CN',
+  modelPolishEnabled: false,
+  selectedModel: '',
+  autoSendEnabled: false,
+}
 export const PREFS_KEY = 'dsh-voice-input.prefs.v1'
 
 const languageValues = new Set(LANGUAGE_OPTIONS.map(option => option.value))
@@ -39,10 +47,28 @@ function browserStorage(): Storage | undefined {
   }
 }
 
-function normalizePrefs(raw: unknown): VoiceInputPrefs {
+/** Normalize persisted or partially updated browser preferences. */
+export function normalizePrefs(raw: unknown): VoiceInputPrefs {
   if (typeof raw !== 'object' || raw === null || !('lang' in raw)) return DEFAULT_PREFS
-  const lang = (raw as { lang?: unknown }).lang
-  return typeof lang === 'string' && languageValues.has(lang) ? { lang } : DEFAULT_PREFS
+  const candidate = raw as {
+    lang?: unknown
+    modelPolishEnabled?: unknown
+    selectedModel?: unknown
+    autoSendEnabled?: unknown
+  }
+  if (typeof candidate.lang !== 'string' || !languageValues.has(candidate.lang)) return DEFAULT_PREFS
+  return {
+    lang: candidate.lang,
+    modelPolishEnabled: typeof candidate.modelPolishEnabled === 'boolean'
+      ? candidate.modelPolishEnabled
+      : DEFAULT_PREFS.modelPolishEnabled,
+    selectedModel: typeof candidate.selectedModel === 'string'
+      ? candidate.selectedModel
+      : DEFAULT_PREFS.selectedModel,
+    autoSendEnabled: typeof candidate.autoSendEnabled === 'boolean'
+      ? candidate.autoSendEnabled
+      : DEFAULT_PREFS.autoSendEnabled,
+  }
 }
 
 /** Read the stable preferences snapshot used by React subscriptions. */
@@ -61,7 +87,7 @@ export function loadPrefs(): VoiceInputPrefs {
   return currentPrefs
 }
 
-/** Persist a supported recognition language and notify mounted surfaces. */
+/** Persist browser-local Voice Input preferences and notify mounted surfaces. */
 export function updatePrefs(patch: Partial<VoiceInputPrefs>): VoiceInputPrefs {
   const next = normalizePrefs({ ...loadPrefs(), ...patch })
   currentPrefs = next
