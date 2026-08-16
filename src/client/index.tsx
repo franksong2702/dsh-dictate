@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { SettingsPanel } from './SettingsPanel.tsx'
+import { loadPrefs, subscribePrefs } from './prefs.ts'
 
 interface InputActions {
   setDraft(text: string): void
@@ -21,23 +24,47 @@ export function apply(ctx: ClientContext): void {
     id: 'voice-input-recorder',
     order: 10,
   }, VoiceInputButton))
+  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+    name: 'settings.plugins.tab',
+    id: 'voice-input',
+    order: 115,
+    label: '语音输入',
+  }, SettingsPanel))
 }
 
-function VoiceInputButton({ inputActions, input }: VoiceInputProps) {
+/** Manual click-to-start, click-to-stop dictation control. */
+export function VoiceInputButton({ inputActions, input }: VoiceInputProps) {
   const [recording, setRecording] = useState(false)
   const [message, setMessage] = useState('')
+  const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
   const recognitionRef = useRef<WebkitSpeechRecognition>()
   const draftRef = useRef(input.draft)
   const actionsRef = useRef(inputActions)
-  const pressedRef = useRef(false)
   const failedRef = useRef(false)
+  const messageTimerRef = useRef<number>()
   draftRef.current = input.draft
   actionsRef.current = inputActions
 
   const supported = typeof window !== 'undefined'
     && (window.SpeechRecognition !== undefined || window.webkitSpeechRecognition !== undefined)
 
+  const clearMessageTimer = (): void => {
+    if (messageTimerRef.current === undefined) return
+    window.clearTimeout(messageTimerRef.current)
+    messageTimerRef.current = undefined
+  }
+
+  const showTransientMessage = (text: string): void => {
+    clearMessageTimer()
+    setMessage(text)
+    messageTimerRef.current = window.setTimeout(() => {
+      setMessage('')
+      messageTimerRef.current = undefined
+    }, 3000)
+  }
+
   useEffect(() => () => {
+    clearMessageTimer()
     const recognition = recognitionRef.current
     if (recognition !== undefined) {
       recognition.onstart = null
@@ -49,23 +76,27 @@ function VoiceInputButton({ inputActions, input }: VoiceInputProps) {
     recognitionRef.current = undefined
   }, [])
 
-  const start = (event: ReactPointerEvent<HTMLButtonElement>): void => {
-    event.preventDefault()
-    if (!supported) {
-      setMessage('当前浏览器不支持语音识别，请使用 Chrome 或 Edge')
+  const toggle = (): void => {
+    if (recognitionRef.current !== undefined) {
+      setMessage('正在完成转写…')
+      recognitionRef.current.stop()
       return
     }
-    event.currentTarget.setPointerCapture(event.pointerId)
+    if (!supported) {
+      showTransientMessage('当前浏览器不支持语音识别，请使用 Chrome 或 Edge')
+      return
+    }
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition
     if (Recognition === undefined) return
 
     let finalText = ''
     const recognition = new Recognition()
-    recognition.lang = 'zh-CN'
+    recognition.lang = prefs.lang
     recognition.continuous = true
     recognition.interimResults = true
     recognition.maxAlternatives = 1
     recognition.onstart = () => {
+      clearMessageTimer()
       failedRef.current = false
       setRecording(true)
       setMessage('正在聆听…')
@@ -84,38 +115,29 @@ function VoiceInputButton({ inputActions, input }: VoiceInputProps) {
     recognition.onerror = event => {
       if (event.error === 'aborted' || event.error === 'no-speech') return
       failedRef.current = true
-      setMessage(event.error === 'not-allowed'
+      showTransientMessage(event.error === 'not-allowed'
         ? '麦克风权限被拒绝，请在浏览器地址栏允许后重试'
         : `语音识别失败：${event.error}`)
     }
     recognition.onend = () => {
       recognitionRef.current = undefined
-      pressedRef.current = false
       setRecording(false)
       const transcript = finalText.trim()
       if (transcript !== '') {
         const current = draftRef.current.trim()
         actionsRef.current.setDraft(current === '' ? transcript : `${draftRef.current} ${transcript}`)
-        setMessage('语音已转入输入框，请检查后发送')
+        showTransientMessage('语音已转入输入框，请检查后发送')
       } else if (!failedRef.current) {
-        setMessage('没有识别到语音')
+        showTransientMessage('没有识别到语音')
       }
     }
     recognitionRef.current = recognition
-    pressedRef.current = true
     try {
       recognition.start()
     } catch {
       recognitionRef.current = undefined
-      pressedRef.current = false
-      setMessage('无法启动麦克风')
+      showTransientMessage('无法启动麦克风')
     }
-  }
-
-  const stop = (): void => {
-    if (!pressedRef.current) return
-    pressedRef.current = false
-    recognitionRef.current?.stop()
   }
 
   return (
@@ -145,10 +167,10 @@ function VoiceInputButton({ inputActions, input }: VoiceInputProps) {
         type="button"
         aria-label="语音输入"
         aria-pressed={recording}
-        title={supported ? '按住说话，松手转文字' : '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'}
-        onPointerDown={start}
-        onPointerUp={stop}
-        onPointerCancel={stop}
+        title={supported
+          ? recording ? '点击结束并转写' : '点击开始录音'
+          : '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'}
+        onClick={toggle}
         style={{
           width: 28,
           height: 28,
