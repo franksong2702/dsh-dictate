@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { SettingsPanel } from './SettingsPanel.tsx'
 import { loadPrefs, subscribePrefs } from './prefs.ts'
 
@@ -24,11 +24,10 @@ export function apply(ctx: ClientContext): void {
     id: 'voice-input-recorder',
     order: 10,
   }, VoiceInputButton))
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-    name: 'settings.plugins.tab',
+  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+    name: 'settings.plugin.item',
     id: 'voice-input',
     order: 115,
-    label: '语音输入',
   }, SettingsPanel))
 }
 

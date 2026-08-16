@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { apply, VoiceInputButton } from '../src/client/index.tsx'
@@ -58,12 +58,13 @@ describe('Voice Input browser plugin', () => {
   })
 
   afterEach(() => {
+    cleanup()
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
     window.SpeechRecognition = undefined
   })
 
-  it('registers settings under the Plugins submenu', () => {
+  it('registers a card inside the Plugin configuration tab', () => {
     const register = vi.fn(() => vi.fn())
     const inject = vi.fn((name: string, mount: () => unknown) => { mount() })
 
@@ -71,23 +72,34 @@ describe('Voice Input browser plugin', () => {
 
     expect(inject.mock.calls.map(call => call[0])).toEqual([
       'conversation.input.right',
-      'settings.plugins.tab',
+      'settings.plugin.item',
     ])
     expect(register.mock.calls[1]?.[0]).toMatchObject({
-      name: 'settings.plugins.tab',
+      name: 'settings.plugin.item',
       id: 'voice-input',
-      label: '语音输入',
     })
+  })
+
+  it('uses host theme tokens without a fixed dark fallback', () => {
+    render(<SettingsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    const select = screen.getByLabelText('识别语言') as HTMLSelectElement
+
+    expect(select.style.background).toBe('var(--dsw-alias-bg-layer-3)')
+    expect(select.style.color).toBe('var(--dsw-alias-label-primary)')
+    expect(select.getAttribute('style')).not.toContain('#202124')
   })
 
   it('persists a language selected on the settings page', () => {
     const first = render(<SettingsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
     fireEvent.change(screen.getByLabelText('识别语言'), { target: { value: 'ja-JP' } })
     expect(loadPrefs().lang).toBe('ja-JP')
     expect(window.localStorage.getItem('dsh-voice-input.prefs.v1')).toBe('{"lang":"ja-JP"}')
 
     first.unmount()
     render(<SettingsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
     expect((screen.getByLabelText('识别语言') as HTMLSelectElement).value).toBe('ja-JP')
   })
 
