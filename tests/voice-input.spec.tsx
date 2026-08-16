@@ -6,6 +6,10 @@ import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { apply, VoiceInputButton } from '../src/client/index.tsx'
 import { loadPrefs, updatePrefs } from '../src/client/prefs.ts'
 
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
+  IconChevronDownOutline14: () => <svg data-testid="native-chevron" />,
+}))
+
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>()
 
@@ -82,7 +86,10 @@ describe('Voice Input browser plugin', () => {
 
   it('uses host theme tokens without a fixed dark fallback', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    const disclosure = screen.getByRole('button', { name: '展开：语音输入' })
+    expect(disclosure.querySelector('svg')).not.toBeNull()
+    expect(disclosure.textContent).not.toContain('▾')
+    fireEvent.click(disclosure)
     const select = screen.getByLabelText('识别语言') as HTMLSelectElement
 
     expect(select.style.background).toBe('var(--dsw-alias-bg-layer-3)')

@@ -1,3 +1,4 @@
+import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useState, useSyncExternalStore, type ReactNode } from 'react'
 import { LANGUAGE_OPTIONS, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
 
@@ -45,12 +46,14 @@ export function SettingsPanel(): ReactNode {
         <span
           aria-hidden="true"
           style={{
+            flex: 'none',
+            display: 'flex',
             color: 'var(--dsw-alias-label-tertiary)',
             transform: open ? 'rotate(180deg)' : undefined,
             transition: 'transform .16s',
           }}
         >
-          ▾
+          <IconChevronDownOutline14 />
         </span>
       </button>
       {open ? (

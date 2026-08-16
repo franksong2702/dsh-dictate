@@ -17,4 +17,4 @@ pnpm run typecheck
 pnpm pack
 ```
 
-把生成的 `dsh-voice-input-0.2.0.tgz` 安装到 Web profile 后重启 `dsh web`。首次使用需要授予浏览器麦克风权限。
+把生成的 `dsh-voice-input-0.3.0-alpha.1.tgz` 安装到 Web profile 后重启 `dsh web`。首次使用需要授予浏览器麦克风权限。

@@ -1,8 +1,20 @@
 {
   "name": "dsh-voice-input",
-  "version": "0.2.0",
+  "version": "0.3.0-alpha.1",
   "description": "Manual browser speech-to-text input for DeepSeek Harness Web",
+  "author": "Frank Song",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/franksong2702/dsh-voice-input.git"
+  },
+  "homepage": "https://github.com/franksong2702/dsh-voice-input#readme",
+  "bugs": {
+    "url": "https://github.com/franksong2702/dsh-voice-input/issues"
+  },
   "type": "module",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
@@ -21,6 +33,7 @@
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-primitives",
         "@deepseek-ai/dsh-client-ui-settings-plugins"
       ],
       "platform": "web"
@@ -47,6 +60,7 @@
     "@deepseek-ai/cordis": ">=4.0.1-rc.1 <4.1.0",
     "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.3 <0.2.0",
     "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.0-rc.3 <0.2.0",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.3 <0.2.0",
     "@deepseek-ai/dsh-client-ui-settings-plugins": ">=0.1.0-rc.3 <0.2.0",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.3 <0.2.0",
     "react": "^18.2.0"
@@ -55,11 +69,13 @@
     "@deepseek-ai/cordis": { "optional": true },
     "@deepseek-ai/dsh-client-runtime": { "optional": true },
     "@deepseek-ai/dsh-client-ui-conversation": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-primitives": { "optional": true },
     "@deepseek-ai/dsh-client-ui-settings-plugins": { "optional": true },
     "@deepseek-ai/dsh-client-ui-slots": { "optional": true },
     "react": { "optional": true }
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.0-rc.6",
     "@types/node": "^24.0.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.1",
