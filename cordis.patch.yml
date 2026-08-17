@@ -1,4 +1,4 @@
 - insert:
-    - id: dsh-contextual-dictation
-      name: dsh-contextual-dictation
+    - id: dsh-dictate
+      name: dsh-dictate
       config: {}

@@ -282,7 +282,7 @@ export async function polishTranscript(
   const timeout = AbortSignal.timeout(POLISH_TIMEOUT_MS)
   const callSignal = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
   const messages: Message[] = [createUserMessage({
-    source: { kind: 'plugin', plugin: 'dsh-contextual-dictation' },
+    source: { kind: 'plugin', plugin: 'dsh-dictate' },
     content: [{ type: 'text', text: framePolishInput(context, request.transcript, request.terms) }],
   })]
   for await (const chunk of ctx.llm.stream({

@@ -1,4 +1,4 @@
-# dsh-contextual-dictation
+# dsh-dictate
 
 ![声音波形进入 Composer 并转化为文字](docs/images/voice-input-hero.jpg)
 
@@ -72,10 +72,10 @@
 
 ## 安装
 
-下载 GitHub Release 中的 `dsh-contextual-dictation-0.4.0-alpha.1.tgz`，安装到 Web profile，然后重启对应的 `dsh web` 进程：
+下载 GitHub Release 中的 `dsh-dictate-0.4.0-alpha.1.tgz`，安装到 Web profile，然后重启对应的 `dsh web` 进程：
 
 ```sh
-dsh plugin --profile web add ./dsh-contextual-dictation-0.4.0-alpha.1.tgz
+dsh plugin --profile web add ./dsh-dictate-0.4.0-alpha.1.tgz
 ```
 
 ## 开发

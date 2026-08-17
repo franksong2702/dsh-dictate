@@ -135,7 +135,7 @@ export function apply(ctx: ClientContext): void {
     })))
   }
   const polish = async (request: PolishClientRequest, signal: AbortSignal): Promise<string> => {
-    const result = await connection.rpc.call('/contextual-dictation', 'polish', request, signal)
+    const result = await connection.rpc.call('/dictate', 'polish', request, signal)
     if (!result.ok) throw new Error(result.error.message)
     const value = result.value
     if (typeof value !== 'object' || value === null || !('text' in value)
@@ -149,7 +149,7 @@ export function apply(ctx: ClientContext): void {
     request: ContextTermsRequest,
     signal: AbortSignal,
   ): Promise<readonly ContextTerm[]> => {
-    const result = await connection.rpc.call('/contextual-dictation', 'terms', request, signal)
+    const result = await connection.rpc.call('/dictate', 'terms', request, signal)
     if (!result.ok) throw new Error(result.error.message)
     const value = result.value
     if (typeof value !== 'object' || value === null || !('terms' in value)) {
@@ -159,7 +159,7 @@ export function apply(ctx: ClientContext): void {
   }
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',
-    id: 'contextual-dictation-recorder',
+    id: 'dictate-recorder',
     order: 10,
   }, props => <VoiceInputButton
     {...props as VoiceInputProps}
@@ -168,12 +168,12 @@ export function apply(ctx: ClientContext): void {
   />))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock',
-    id: 'contextual-dictation-transcription',
+    id: 'dictate-transcription',
     order: 90,
   }, props => <TranscriptionDock sessionId={(props as VoiceInputProps).sessionId} />))
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
-    id: 'contextual-dictation',
+    id: 'dictate',
     order: 115,
   }, () => <VoiceInputSettings loadModels={loadModels} />))
 }

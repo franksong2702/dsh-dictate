@@ -131,7 +131,7 @@ describe('Contextual Dictation browser plugin', () => {
     ])
     expect(register.mock.calls[2]?.[0]).toMatchObject({
       name: 'settings.plugin.item',
-      id: 'contextual-dictation',
+      id: 'dictate',
     })
   })
 
@@ -188,7 +188,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     fireEvent.change(screen.getByLabelText('识别语言'), { target: { value: 'ja-JP' } })
     expect(loadPrefs().lang).toBe('ja-JP')
-    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
+    expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
       '{"lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
 
@@ -252,7 +252,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.change(screen.getByLabelText('润色模型'), { target: { value: 'deepseek-reasoner' } })
 
     expect(loadPrefs().selectedModel).toBe('deepseek-reasoner')
-    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
+    expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
       '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
     )
   })
@@ -269,7 +269,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     fireEvent.click(toggle)
     expect(loadPrefs().autoSendEnabled).toBe(true)
-    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
+    expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
       '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
     )
   })
@@ -284,7 +284,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     fireEvent.click(shortcut)
     expect(loadPrefs().composerShortcutEnabled).toBe(true)
-    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
+    expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
       '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
   })

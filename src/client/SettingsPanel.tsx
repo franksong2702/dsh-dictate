@@ -79,12 +79,12 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
             识别和行为开关保存在当前浏览器中；动态词汇仅用于本次录音，不会保存。
           </p>
           <label
-            htmlFor="contextual-dictation-language"
+            htmlFor="dictate-language"
             style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
           >
             <span>识别语言</span>
             <select
-              id="contextual-dictation-language"
+              id="dictate-language"
               value={prefs.lang}
               onChange={event => { updatePrefs({ lang: event.currentTarget.value }) }}
               style={{
@@ -106,11 +106,11 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
           {prefs.lang.startsWith('zh-') ? (
             <div style={{ display: 'grid', gap: 8, marginTop: 12, maxWidth: 520 }}>
               <label
-                htmlFor="contextual-dictation-mixed-language-optimization"
+                htmlFor="dictate-mixed-language-optimization"
                 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
               >
                 <input
-                  id="contextual-dictation-mixed-language-optimization"
+                  id="dictate-mixed-language-optimization"
                   type="checkbox"
                   checked={prefs.mixedLanguageOptimizationEnabled}
                   onChange={event => {
@@ -126,11 +126,11 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
           ) : null}
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
-              htmlFor="contextual-dictation-composer-shortcut"
+              htmlFor="dictate-composer-shortcut"
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
             >
               <input
-                id="contextual-dictation-composer-shortcut"
+                id="dictate-composer-shortcut"
                 type="checkbox"
                 checked={prefs.composerShortcutEnabled}
                 onChange={event => { updatePrefs({ composerShortcutEnabled: event.currentTarget.checked }) }}
@@ -143,11 +143,11 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
           </div>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
-              htmlFor="contextual-dictation-model-polish"
+              htmlFor="dictate-model-polish"
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
             >
               <input
-                id="contextual-dictation-model-polish"
+                id="dictate-model-polish"
                 type="checkbox"
                 checked={prefs.modelPolishEnabled}
                 onChange={event => { updatePrefs({ modelPolishEnabled: event.currentTarget.checked }) }}
@@ -164,12 +164,12 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
                 </p>
               ) : (
                 <label
-                  htmlFor="contextual-dictation-polish-model"
+                  htmlFor="dictate-polish-model"
                   style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 500 }}
                 >
                   <span>润色模型</span>
                   <select
-                    id="contextual-dictation-polish-model"
+                    id="dictate-polish-model"
                     value={prefs.selectedModel}
                     onChange={event => { updatePrefs({ selectedModel: event.currentTarget.value }) }}
                     style={{
@@ -194,11 +194,11 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
           </div>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
-              htmlFor="contextual-dictation-auto-send"
+              htmlFor="dictate-auto-send"
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
             >
               <input
-                id="contextual-dictation-auto-send"
+                id="dictate-auto-send"
                 type="checkbox"
                 checked={prefs.autoSendEnabled}
                 onChange={event => { updatePrefs({ autoSendEnabled: event.currentTarget.checked }) }}

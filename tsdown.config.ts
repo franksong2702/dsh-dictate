@@ -1,6 +1,6 @@
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = 'dsh-contextual-dictation'
+const PLUGIN_ID = 'dsh-dictate'
 const CLIENT_EXTERNALS = [
   'react',
   'react/jsx-runtime',

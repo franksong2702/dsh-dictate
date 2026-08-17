@@ -36,7 +36,7 @@ export const DEFAULT_PREFS: VoiceInputPrefs = {
   selectedModel: '',
   autoSendEnabled: false,
 }
-export const PREFS_KEY = 'dsh-contextual-dictation.prefs.v1'
+export const PREFS_KEY = 'dsh-dictate.prefs.v1'
 
 const languageValues = new Set(LANGUAGE_OPTIONS.map(option => option.value))
 const listeners = new Set<() => void>()

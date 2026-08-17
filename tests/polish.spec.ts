@@ -190,7 +190,7 @@ describe('model transcript polishing', () => {
     }
     apply(ctx as never)
 
-    expect(handle).toHaveBeenCalledWith('/contextual-dictation', expect.any(Function), { authority: 'trusted-host' })
+    expect(handle).toHaveBeenCalledWith('/dictate', expect.any(Function), { authority: 'trusted-host' })
     const signal = new AbortController().signal
     const termsResult = await handler?.('terms', {
       sessionId: 'session-1', draft: '在 `Codex` 中输入', includeInferred: true,
@@ -209,11 +209,11 @@ describe('model transcript polishing', () => {
 
   it('extracts bounded recent technical terms without common prose', () => {
     const terms = extractContextTerms([
-      { text: 'Earlier we discussed DeepSeek Harness and `dsh-contextual-dictation`。', source: 'session' },
+      { text: 'Earlier we discussed DeepSeek Harness and `dsh-dictate`。', source: 'session' },
       { text: 'Composer 使用 Web Speech API，并保留“模型润色”。', source: 'composer' },
     ])
     expect(terms.map(term => term.text)).toEqual(expect.arrayContaining([
-      '模型润色', 'Composer', 'Web Speech API', 'dsh-contextual-dictation', 'DeepSeek Harness',
+      '模型润色', 'Composer', 'Web Speech API', 'dsh-dictate', 'DeepSeek Harness',
     ]))
     expect(terms.map(term => term.text)).not.toContain('Earlier')
     expect(terms.map(term => term.text)).not.toEqual(expect.arrayContaining([

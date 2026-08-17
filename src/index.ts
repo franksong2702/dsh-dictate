@@ -7,7 +7,7 @@ import { parsePolishRequest, polishTranscript } from './polish.ts'
 import { parseContextTermsRequest } from './terms.ts'
 
 /** Cordis plugin name used by the profile bundle patch. */
-export const name = 'dsh-contextual-dictation'
+export const name = 'dsh-dictate'
 
 /** Host services used by the browser-safe Contextual Dictation RPC. */
 export const inject = ['connection', 'llm', 'sessions']
@@ -19,7 +19,7 @@ export function apply(ctx: Context): void {
     readonly llm: LlmRuntime
     readonly sessions: SessionStore
   }
-  ctx.effect(() => host.connection.rpc.handle('/contextual-dictation', async (endpoint, payload, signal) => {
+  ctx.effect(() => host.connection.rpc.handle('/dictate', async (endpoint, payload, signal) => {
     try {
       if (endpoint === 'terms') {
         const request = parseContextTermsRequest(payload)
@@ -45,5 +45,5 @@ export function apply(ctx: Context): void {
         },
       }
     }
-  }, { authority: 'trusted-host' }), 'contextual-dictation: contextual terminology and model polish RPC')
+  }, { authority: 'trusted-host' }), 'dictate: contextual terminology and model polish RPC')
 }
