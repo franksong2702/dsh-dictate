@@ -2,11 +2,21 @@ interface WebkitSpeechRecognitionConstructor {
   new (): WebkitSpeechRecognition
 }
 
+interface WebkitSpeechRecognitionPhraseConstructor {
+  new (phrase: string, boost?: number): WebkitSpeechRecognitionPhrase
+}
+
+interface WebkitSpeechRecognitionPhrase {
+  readonly phrase: string
+  readonly boost: number
+}
+
 interface WebkitSpeechRecognition extends EventTarget {
   lang: string
   continuous: boolean
   interimResults: boolean
   maxAlternatives: number
+  phrases?: WebkitSpeechRecognitionPhrase[]
   onstart: (() => void) | null
   onresult: ((event: WebkitSpeechRecognitionEvent) => void) | null
   onerror: ((event: WebkitSpeechRecognitionErrorEvent) => void) | null
@@ -29,4 +39,5 @@ interface WebkitSpeechRecognitionErrorEvent extends Event {
 interface Window {
   webkitSpeechRecognition?: WebkitSpeechRecognitionConstructor
   SpeechRecognition?: WebkitSpeechRecognitionConstructor
+  SpeechRecognitionPhrase?: WebkitSpeechRecognitionPhraseConstructor
 }

@@ -5,12 +5,20 @@ import type { ComponentProps, ComponentType, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { TranscriptionDock } from '../src/client/TranscriptionDock.tsx'
-import { apply, encodeModelReference, joinRecognitionSegments, VoiceInputButton } from '../src/client/index.tsx'
+import {
+  apply,
+  encodeModelReference,
+  joinRecognitionSegments,
+  VoiceInputButton,
+} from '../src/client/index.tsx'
 import { loadPrefs, normalizePrefs, updatePrefs } from '../src/client/prefs.ts'
+import type { ContextTerm } from '../src/terms.ts'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconChevronDownOutline14: () => <svg data-testid="native-chevron" />,
 }))
+
+const DEFAULT_USER_AGENT = window.navigator.userAgent
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>()
@@ -30,11 +38,13 @@ class FakeRecognition extends EventTarget {
   continuous = false
   interimResults = false
   maxAlternatives = 0
+  phrases: WebkitSpeechRecognitionPhrase[] = []
   onstart: (() => void) | null = null
   onresult: ((event: WebkitSpeechRecognitionEvent) => void) | null = null
   onerror: ((event: WebkitSpeechRecognitionErrorEvent) => void) | null = null
   onend: (() => void) | null = null
   startCalls = 0
+  phrasesAtStart: WebkitSpeechRecognitionPhrase[] = []
   stopCalls = 0
   abortCalls = 0
 
@@ -43,7 +53,10 @@ class FakeRecognition extends EventTarget {
     FakeRecognition.instances.push(this)
   }
 
-  start(): void { this.startCalls += 1 }
+  start(): void {
+    this.startCalls += 1
+    this.phrasesAtStart = [...this.phrases]
+  }
   stop(): void { this.stopCalls += 1 }
   abort(): void { this.abortCalls += 1 }
 
@@ -61,6 +74,10 @@ class FakeRecognition extends EventTarget {
   }
 }
 
+class FakeSpeechRecognitionPhrase implements WebkitSpeechRecognitionPhrase {
+  constructor(readonly phrase: string, readonly boost = 1) {}
+}
+
 function voiceSurfaces(props: ComponentProps<typeof VoiceInputButton>): ReactNode {
   return <>
     <VoiceInputButton {...props} />
@@ -68,13 +85,29 @@ function voiceSurfaces(props: ComponentProps<typeof VoiceInputButton>): ReactNod
   </>
 }
 
-describe('Voice Input browser plugin', () => {
+function voiceComposer(props: ComponentProps<typeof VoiceInputButton>): ReactNode {
+  return <div data-composer-card>
+    <textarea aria-label="Composer" />
+    {voiceSurfaces(props)}
+  </div>
+}
+
+describe('Contextual Dictation browser plugin', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     FakeRecognition.instances = []
     Object.defineProperty(window, 'localStorage', { configurable: true, value: new MemoryStorage() })
+    Object.defineProperty(window.navigator, 'userAgent', { configurable: true, value: DEFAULT_USER_AGENT })
     window.SpeechRecognition = FakeRecognition
-    updatePrefs({ lang: 'zh-CN', modelPolishEnabled: false, selectedModel: '', autoSendEnabled: false })
+    window.SpeechRecognitionPhrase = undefined
+    updatePrefs({
+      lang: 'zh-CN',
+      mixedLanguageOptimizationEnabled: false,
+      composerShortcutEnabled: false,
+      modelPolishEnabled: false,
+      selectedModel: '',
+      autoSendEnabled: false,
+    })
   })
 
   afterEach(() => {
@@ -82,6 +115,7 @@ describe('Voice Input browser plugin', () => {
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
     window.SpeechRecognition = undefined
+    window.SpeechRecognitionPhrase = undefined
   })
 
   it('registers a card inside the Plugin configuration tab', () => {
@@ -97,7 +131,7 @@ describe('Voice Input browser plugin', () => {
     ])
     expect(register.mock.calls[2]?.[0]).toMatchObject({
       name: 'settings.plugin.item',
-      id: 'voice-input',
+      id: 'contextual-dictation',
     })
   })
 
@@ -127,7 +161,7 @@ describe('Voice Input browser plugin', () => {
     expect(Settings).toBeDefined()
     render(Settings === undefined ? null : <Settings />)
     await act(async () => { await Promise.resolve() })
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '启用模型润色' }))
 
     expect(screen.getByLabelText('润色模型')).not.toBeNull()
@@ -137,9 +171,10 @@ describe('Voice Input browser plugin', () => {
 
   it('uses host theme tokens without a fixed dark fallback', () => {
     render(<SettingsPanel />)
-    const disclosure = screen.getByRole('button', { name: '展开：语音输入' })
+    const disclosure = screen.getByRole('button', { name: '展开：上下文语音输入' })
     expect(disclosure.querySelector('svg')).not.toBeNull()
     expect(disclosure.textContent).not.toContain('▾')
+    expect(disclosure.textContent).toContain('把语音实时转写到 Composer，并结合当前上下文优化识别和润色。')
     fireEvent.click(disclosure)
     const select = screen.getByLabelText('识别语言') as HTMLSelectElement
 
@@ -150,32 +185,55 @@ describe('Voice Input browser plugin', () => {
 
   it('persists a language selected on the settings page', () => {
     const first = render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     fireEvent.change(screen.getByLabelText('识别语言'), { target: { value: 'ja-JP' } })
     expect(loadPrefs().lang).toBe('ja-JP')
-    expect(window.localStorage.getItem('dsh-voice-input.prefs.v1')).toBe(
-      '{"lang":"ja-JP","modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
+    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
+      '{"lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
 
     first.unmount()
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     expect((screen.getByLabelText('识别语言') as HTMLSelectElement).value).toBe('ja-JP')
   })
 
   it('normalizes legacy language-only preferences and new model fields', () => {
     expect(normalizePrefs({ lang: 'ja-JP' })).toEqual({
       lang: 'ja-JP',
+      mixedLanguageOptimizationEnabled: false,
+      composerShortcutEnabled: false,
       modelPolishEnabled: false,
       selectedModel: '',
       autoSendEnabled: false,
     })
     expect(normalizePrefs({ lang: 'en-US', modelPolishEnabled: true, selectedModel: 'deepseek-chat' })).toEqual({
       lang: 'en-US',
+      mixedLanguageOptimizationEnabled: false,
+      composerShortcutEnabled: false,
       modelPolishEnabled: true,
       selectedModel: 'deepseek-chat',
       autoSendEnabled: false,
     })
+  })
+
+  it('shows mixed-language optimization for every Chinese language and preserves it while inactive', () => {
+    render(<SettingsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    const language = screen.getByLabelText('识别语言')
+
+    for (const value of ['zh-CN', 'zh-HK', 'zh-TW']) {
+      fireEvent.change(language, { target: { value } })
+      expect(screen.getByRole('checkbox', { name: '优化中英混合识别' })).not.toBeNull()
+    }
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '优化中英混合识别' }))
+    expect(loadPrefs().mixedLanguageOptimizationEnabled).toBe(true)
+    fireEvent.change(language, { target: { value: 'en-US' } })
+    expect(screen.queryByRole('checkbox', { name: '优化中英混合识别' })).toBeNull()
+    expect(loadPrefs().mixedLanguageOptimizationEnabled).toBe(true)
+    fireEvent.change(language, { target: { value: 'zh-CN' } })
+    expect((screen.getByRole('checkbox', { name: '优化中英混合识别' }) as HTMLInputElement).checked).toBe(true)
   })
 
   it('toggles model polishing and persists a selected model', () => {
@@ -183,9 +241,9 @@ describe('Voice Input browser plugin', () => {
       { value: 'deepseek-chat', label: 'DeepSeek Chat' },
       { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
     ]} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
 
-    expect(screen.getByText('录音转写完成后，把原始转写和最近的会话文本发送给所选模型提供商进行润色，再填入输入框。是否自动发送由“自动发送转写结果”控制；润色失败时使用原始转写。')).not.toBeNull()
+    expect(screen.getByText('所选模型会根据当前 Session 和 Composer 提取相关词汇，提高语音识别和转写润色的准确度。')).not.toBeNull()
     expect((screen.getByRole('checkbox', { name: '启用模型润色' }) as HTMLInputElement).checked).toBe(false)
     expect(screen.queryByLabelText('润色模型')).toBeNull()
 
@@ -194,29 +252,46 @@ describe('Voice Input browser plugin', () => {
     fireEvent.change(screen.getByLabelText('润色模型'), { target: { value: 'deepseek-reasoner' } })
 
     expect(loadPrefs().selectedModel).toBe('deepseek-reasoner')
-    expect(window.localStorage.getItem('dsh-voice-input.prefs.v1')).toBe(
-      '{"lang":"zh-CN","modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
+    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
+      '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
     )
   })
 
   it('keeps automatic sending off by default and persists explicit opt-in', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
 
-    const toggle = screen.getByRole('checkbox', { name: '自动发送转写结果' }) as HTMLInputElement
+    const toggle = screen.getByRole('checkbox', { name: '自动发送转写结果（Beta）' }) as HTMLInputElement
     expect(toggle.checked).toBe(false)
-    expect(screen.getByText('用户点击结束录音后，自动发送输入框中的全部文字。浏览器自行结束识别时只填入输入框，不自动发送。启用模型润色时会等待润色完成；润色失败时仍会发送原始转写。')).not.toBeNull()
+    expect(screen.getByText('用户主动结束录音后，自动发送全部文字。识别或润色结果可能有误，建议保持关闭，并在 Composer 中检查后手动发送。')).not.toBeNull()
+    const modelPolish = screen.getByRole('checkbox', { name: '启用模型润色' })
+    expect(modelPolish.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
     fireEvent.click(toggle)
     expect(loadPrefs().autoSendEnabled).toBe(true)
-    expect(window.localStorage.getItem('dsh-voice-input.prefs.v1')).toBe(
-      '{"lang":"zh-CN","modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
+    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
+      '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
+    )
+  })
+
+  it('keeps the Composer shortcut off by default and persists explicit opt-in', () => {
+    render(<SettingsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+
+    const shortcut = screen.getByRole('checkbox', { name: '启用 Composer 录音快捷键' }) as HTMLInputElement
+    expect(shortcut.checked).toBe(false)
+    expect(screen.getByText('光标位于 Composer 文本框时，macOS 单击右 Command，Windows/Linux 单击右 Control。按一次开始，再按一次结束；与其他按键组合时不会触发。')).not.toBeNull()
+
+    fireEvent.click(shortcut)
+    expect(loadPrefs().composerShortcutEnabled).toBe(true)
+    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
+      '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
   })
 
   it('reports that polishing models are unavailable when the host list is empty', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '启用模型润色' }))
 
     expect(screen.getByText('暂无可用模型')).not.toBeNull()
@@ -253,6 +328,299 @@ describe('Voice Input browser plugin', () => {
     expect(screen.queryByRole('status')).not.toBeNull()
     act(() => { vi.advanceTimersByTime(1) })
     expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('injects temporary context terms into supported Chinese recognition and model polishing', async () => {
+    window.SpeechRecognitionPhrase = FakeSpeechRecognitionPhrase
+    const selectedModel = encodeModelReference({ provider: 'deepseek', model: 'chat' })
+    updatePrefs({
+      lang: 'zh-TW',
+      mixedLanguageOptimizationEnabled: true,
+      modelPolishEnabled: true,
+      selectedModel,
+    })
+    const contextTerms = [
+      { text: 'DeepSeek Harness', boost: 6, source: 'session' as const },
+      { text: 'Codex', boost: 4, source: 'composer' as const },
+    ]
+    const loadContextTerms = vi.fn(() => Promise.resolve(contextTerms))
+    const polish = vi.fn(() => Promise.resolve('在 Codex 使用 DeepSeek Harness'))
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '当前 Composer' },
+      sessionId: 'session-1',
+      loadContextTerms,
+      polish,
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    expect(recognition?.startCalls).toBe(1)
+    expect(recognition?.phrases).toEqual([])
+    await act(async () => { await Promise.resolve() })
+
+    expect(loadContextTerms).toHaveBeenCalledWith(
+      {
+        sessionId: 'session-1',
+        draft: '当前 Composer',
+        includeInferred: true,
+        model: { provider: 'deepseek', model: 'chat' },
+      },
+      expect.any(AbortSignal),
+    )
+    expect(recognition?.phrases).toEqual([
+      new FakeSpeechRecognitionPhrase('DeepSeek Harness', 6),
+      new FakeSpeechRecognitionPhrase('Codex', 4),
+    ])
+
+    await act(async () => { recognition?.finishWith('在扣代克斯使用深度求索') })
+    expect(polish).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      provider: 'deepseek',
+      model: 'chat',
+      transcript: '在扣代克斯使用深度求索',
+      terms: contextTerms,
+    }, expect.any(AbortSignal))
+  })
+
+  it('debounces background extraction and cancels an obsolete Composer key', async () => {
+    updatePrefs({ mixedLanguageOptimizationEnabled: true })
+    const loadContextTerms = vi.fn((_request: unknown, _signal: AbortSignal) => Promise.resolve([
+      { text: '新词', boost: 4, source: 'composer' as const },
+    ]))
+    const view = render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '旧草稿', phase: 'plain' },
+      sessionId: 'session-1',
+      loadContextTerms,
+    }))
+
+    act(() => { vi.advanceTimersByTime(999) })
+    expect(loadContextTerms).not.toHaveBeenCalled()
+    view.rerender(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '新草稿', phase: 'plain' },
+      sessionId: 'session-1',
+      loadContextTerms,
+    }))
+    act(() => { vi.advanceTimersByTime(1000) })
+    await act(async () => { await Promise.resolve() })
+
+    expect(loadContextTerms).toHaveBeenCalledOnce()
+    expect(loadContextTerms.mock.calls[0]?.[0]).toMatchObject({ draft: '新草稿' })
+    expect(loadContextTerms.mock.calls[0]?.[1].aborted).toBe(false)
+  })
+
+  it('uses an exact prefetched cache before recognition.start', async () => {
+    window.SpeechRecognitionPhrase = FakeSpeechRecognitionPhrase
+    updatePrefs({ mixedLanguageOptimizationEnabled: true })
+    const terms = [{ text: 'DeepSeek Harness', boost: 6, source: 'session' as const }]
+    const loadContextTerms = vi.fn(() => Promise.resolve(terms))
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '当前 Composer', phase: 'plain' },
+      sessionId: 'session-1',
+      loadContextTerms,
+    }))
+
+    act(() => { vi.advanceTimersByTime(1000) })
+    await act(async () => { await Promise.resolve() })
+    expect(loadContextTerms).toHaveBeenCalledOnce()
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    expect(loadContextTerms).toHaveBeenCalledTimes(2)
+    expect(recognition?.phrasesAtStart).toEqual([
+      new FakeSpeechRecognitionPhrase('DeepSeek Harness', 6),
+    ])
+  })
+
+  it('starts recognition without waiting for an unfinished model extraction', async () => {
+    window.SpeechRecognitionPhrase = FakeSpeechRecognitionPhrase
+    updatePrefs({ mixedLanguageOptimizationEnabled: true })
+    let resolveTerms: ((terms: readonly ContextTerm[]) => void) | undefined
+    const loadContextTerms = vi.fn(() => new Promise<readonly ContextTerm[]>((resolve) => {
+      resolveTerms = resolve
+    }))
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '当前 Composer', phase: 'plain' },
+      sessionId: 'session-1',
+      loadContextTerms,
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    expect(recognition?.startCalls).toBe(1)
+    expect(recognition?.phrasesAtStart).toEqual([])
+
+    await act(async () => {
+      resolveTerms?.([{ text: 'DeepSeek Harness', boost: 6, source: 'session' }])
+      await Promise.resolve()
+    })
+    expect(recognition?.phrases).toEqual([
+      new FakeSpeechRecognitionPhrase('DeepSeek Harness', 6),
+    ])
+  })
+
+  it('refreshes a cached phrase list after start without blocking recognition', async () => {
+    window.SpeechRecognitionPhrase = FakeSpeechRecognitionPhrase
+    updatePrefs({ mixedLanguageOptimizationEnabled: true })
+    const oldTerms = [{ text: '旧专名', boost: 4, source: 'session' as const }]
+    const newTerms = [{ text: '新专名', boost: 6, source: 'composer' as const }]
+    let calls = 0
+    const loadContextTerms = vi.fn(() => Promise.resolve(calls++ === 0 ? oldTerms : newTerms))
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '当前 Composer', phase: 'plain' },
+      sessionId: 'session-1',
+      loadContextTerms,
+    }))
+
+    act(() => { vi.advanceTimersByTime(1000) })
+    await act(async () => { await Promise.resolve() })
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    expect(recognition?.phrasesAtStart).toEqual([
+      new FakeSpeechRecognitionPhrase('旧专名', 4),
+    ])
+    expect(loadContextTerms).toHaveBeenCalledTimes(2)
+
+    await act(async () => { await Promise.resolve() })
+    expect(recognition?.phrases).toEqual([
+      new FakeSpeechRecognitionPhrase('新专名', 6),
+    ])
+  })
+
+  it('keeps ordinary recognition when contextual phrases are unsupported', async () => {
+    updatePrefs({ lang: 'zh-HK', mixedLanguageOptimizationEnabled: true })
+    const loadContextTerms = vi.fn(() => Promise.resolve([
+      { text: 'DeepSeek Harness', boost: 5, source: 'session' as const },
+    ]))
+    const setDraft = vi.fn()
+    render(voiceSurfaces({
+      inputActions: { setDraft, submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'session-1',
+      loadContextTerms,
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    await act(async () => { await Promise.resolve() })
+    expect(recognition?.phrases).toEqual([])
+    act(() => { recognition?.finishWith('普通识别') })
+    expect(setDraft).toHaveBeenCalledWith('普通识别')
+  })
+
+  it('retries once without phrase bias when the recognition service rejects phrases', async () => {
+    window.SpeechRecognitionPhrase = FakeSpeechRecognitionPhrase
+    updatePrefs({ lang: 'zh-CN', mixedLanguageOptimizationEnabled: true })
+    const loadContextTerms = vi.fn(() => Promise.resolve([
+      { text: 'DeepSeek Harness', boost: 5, source: 'session' as const },
+    ]))
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'session-1',
+      loadContextTerms,
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const first = FakeRecognition.instances[0]
+    await act(async () => { await Promise.resolve() })
+    expect(first?.phrases).toHaveLength(1)
+
+    act(() => {
+      first?.onerror?.({ error: 'phrases-not-supported', message: '' } as WebkitSpeechRecognitionErrorEvent)
+      first?.onend?.()
+    })
+    const second = FakeRecognition.instances[1]
+    expect(second?.startCalls).toBe(1)
+    expect(second?.phrases).toEqual([])
+    expect(loadContextTerms).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses right Command on macOS', () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+    })
+    updatePrefs({ composerShortcutEnabled: true })
+    render(voiceComposer({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'session-1',
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+    composer.focus()
+
+    fireEvent.keyDown(composer, { key: 'Meta', code: 'MetaRight', metaKey: true, location: 2 })
+    fireEvent.keyUp(composer, { key: 'Meta', code: 'MetaRight', location: 2 })
+
+    expect(FakeRecognition.instances).toHaveLength(1)
+    expect(FakeRecognition.instances[0]?.startCalls).toBe(1)
+  })
+
+  it('starts and explicitly stops from the right-side modifier while the Composer is focused', () => {
+    updatePrefs({ composerShortcutEnabled: true, autoSendEnabled: true })
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    render(voiceComposer({ inputActions: { setDraft, submit }, input: { draft: '' }, sessionId: 'session-1' }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+    composer.focus()
+
+    fireEvent.keyDown(composer, { key: 'Control', code: 'ControlRight', ctrlKey: true, location: 2 })
+    fireEvent.keyUp(composer, { key: 'Control', code: 'ControlRight', location: 2 })
+    const recognition = FakeRecognition.instances[0]
+    expect(recognition).toBeDefined()
+    expect(recognition?.startCalls).toBe(1)
+
+    act(() => { recognition?.onstart?.() })
+    fireEvent.keyDown(composer, { key: 'Control', code: 'ControlRight', ctrlKey: true, location: 2 })
+    fireEvent.keyUp(composer, { key: 'Control', code: 'ControlRight', location: 2 })
+    expect(recognition?.stopCalls).toBe(1)
+
+    act(() => { recognition?.finishWith('快捷键转写') })
+    expect(setDraft).toHaveBeenCalledWith('快捷键转写')
+    expect(submit).toHaveBeenCalledOnce()
+  })
+
+  it('ignores shortcut chords, repeats, composition, the left modifier, and focus outside Composer', () => {
+    updatePrefs({ composerShortcutEnabled: true })
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    render(<>
+      {voiceComposer({ inputActions: { setDraft, submit }, input: { draft: '' }, sessionId: 'session-1' })}
+      <textarea aria-label="Outside" />
+    </>)
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+    const outside = screen.getByRole('textbox', { name: 'Outside' })
+    composer.focus()
+
+    fireEvent.keyDown(composer, { key: 'Control', code: 'ControlRight', ctrlKey: true, location: 2 })
+    fireEvent.keyDown(composer, { key: 'c', code: 'KeyC', ctrlKey: true })
+    fireEvent.keyUp(composer, { key: 'c', code: 'KeyC', ctrlKey: true })
+    fireEvent.keyUp(composer, { key: 'Control', code: 'ControlRight', location: 2 })
+    fireEvent.keyDown(composer, {
+      key: 'Control', code: 'ControlRight', ctrlKey: true, location: 2, repeat: true,
+    })
+    fireEvent.keyUp(composer, { key: 'Control', code: 'ControlRight', location: 2 })
+    fireEvent.keyDown(composer, {
+      key: 'Control', code: 'ControlRight', ctrlKey: true, location: 2, isComposing: true,
+    })
+    fireEvent.keyUp(composer, {
+      key: 'Control', code: 'ControlRight', location: 2, isComposing: true,
+    })
+    fireEvent.keyDown(composer, { key: 'Control', code: 'ControlLeft', ctrlKey: true, location: 1 })
+    fireEvent.keyUp(composer, { key: 'Control', code: 'ControlLeft', location: 1 })
+    outside.focus()
+    fireEvent.keyDown(outside, { key: 'Control', code: 'ControlRight', ctrlKey: true, location: 2 })
+    fireEvent.keyUp(outside, { key: 'Control', code: 'ControlRight', location: 2 })
+
+    expect(FakeRecognition.instances).toHaveLength(0)
+    expect(setDraft).not.toHaveBeenCalled()
+    expect(submit).not.toHaveBeenCalled()
   })
 
   it('shows live final and interim recognition without mutating the Composer draft', () => {
@@ -363,12 +731,42 @@ describe('Voice Input browser plugin', () => {
       provider: 'deepseek',
       model: 'chat',
       transcript: '深度求索哈尼斯',
+      terms: [],
     }, expect.any(AbortSignal))
 
     await act(async () => { resolvePolish?.('DeepSeek Harness') })
     expect(setDraft).toHaveBeenCalledWith('前文 DeepSeek Harness')
     expect(submit).not.toHaveBeenCalled()
     expect(screen.getByRole('status').textContent).toContain('语音已转入输入框，请检查后发送')
+  })
+
+  it('starts polishing immediately when background terms are still pending', () => {
+    const selectedModel = encodeModelReference({ provider: 'deepseek', model: 'chat' })
+    updatePrefs({ modelPolishEnabled: true, selectedModel })
+    let resolveTerms: ((terms: readonly ContextTerm[]) => void) | undefined
+    const loadContextTerms = vi.fn(() => new Promise<readonly ContextTerm[]>((resolve) => {
+      resolveTerms = resolve
+    }))
+    const polish = vi.fn(() => Promise.resolve('即时润色'))
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '前文', phase: 'plain' },
+      sessionId: 'session-1',
+      loadContextTerms,
+      polish,
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.finishWith('原始转写') })
+
+    expect(polish).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'deepseek',
+      model: 'chat',
+      transcript: '原始转写',
+      terms: [],
+    }), expect.any(AbortSignal))
+    resolveTerms?.([])
   })
 
   it('keeps the original transcript when model polishing fails', async () => {

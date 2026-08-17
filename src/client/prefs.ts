@@ -4,7 +4,7 @@ export interface LanguageOption {
   readonly label: string
 }
 
-/** Languages exposed by the Voice Input settings page. */
+/** Languages exposed by the Contextual Dictation settings page. */
 export const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
   { value: 'zh-CN', label: '中文（普通话）' },
   { value: 'zh-HK', label: '中文（粤语）' },
@@ -18,9 +18,11 @@ export const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
   { value: 'ru-RU', label: 'Русский' },
 ]
 
-/** Browser-local Voice Input preferences. */
+/** Browser-local Contextual Dictation preferences. */
 export interface VoiceInputPrefs {
   readonly lang: string
+  readonly mixedLanguageOptimizationEnabled: boolean
+  readonly composerShortcutEnabled: boolean
   readonly modelPolishEnabled: boolean
   readonly selectedModel: string
   readonly autoSendEnabled: boolean
@@ -28,11 +30,13 @@ export interface VoiceInputPrefs {
 
 export const DEFAULT_PREFS: VoiceInputPrefs = {
   lang: 'zh-CN',
+  mixedLanguageOptimizationEnabled: false,
+  composerShortcutEnabled: false,
   modelPolishEnabled: false,
   selectedModel: '',
   autoSendEnabled: false,
 }
-export const PREFS_KEY = 'dsh-voice-input.prefs.v1'
+export const PREFS_KEY = 'dsh-contextual-dictation.prefs.v1'
 
 const languageValues = new Set(LANGUAGE_OPTIONS.map(option => option.value))
 const listeners = new Set<() => void>()
@@ -52,6 +56,8 @@ export function normalizePrefs(raw: unknown): VoiceInputPrefs {
   if (typeof raw !== 'object' || raw === null || !('lang' in raw)) return DEFAULT_PREFS
   const candidate = raw as {
     lang?: unknown
+    mixedLanguageOptimizationEnabled?: unknown
+    composerShortcutEnabled?: unknown
     modelPolishEnabled?: unknown
     selectedModel?: unknown
     autoSendEnabled?: unknown
@@ -59,6 +65,12 @@ export function normalizePrefs(raw: unknown): VoiceInputPrefs {
   if (typeof candidate.lang !== 'string' || !languageValues.has(candidate.lang)) return DEFAULT_PREFS
   return {
     lang: candidate.lang,
+    mixedLanguageOptimizationEnabled: typeof candidate.mixedLanguageOptimizationEnabled === 'boolean'
+      ? candidate.mixedLanguageOptimizationEnabled
+      : DEFAULT_PREFS.mixedLanguageOptimizationEnabled,
+    composerShortcutEnabled: typeof candidate.composerShortcutEnabled === 'boolean'
+      ? candidate.composerShortcutEnabled
+      : DEFAULT_PREFS.composerShortcutEnabled,
     modelPolishEnabled: typeof candidate.modelPolishEnabled === 'boolean'
       ? candidate.modelPolishEnabled
       : DEFAULT_PREFS.modelPolishEnabled,
@@ -87,7 +99,7 @@ export function loadPrefs(): VoiceInputPrefs {
   return currentPrefs
 }
 
-/** Persist browser-local Voice Input preferences and notify mounted surfaces. */
+/** Persist browser-local Contextual Dictation preferences and notify mounted surfaces. */
 export function updatePrefs(patch: Partial<VoiceInputPrefs>): VoiceInputPrefs {
   const next = normalizePrefs({ ...loadPrefs(), ...patch })
   currentPrefs = next
