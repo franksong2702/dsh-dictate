@@ -4,9 +4,14 @@ import { apply } from '../src/index.ts'
 import {
   CONTEXT_BYTE_LIMIT,
   CONTEXT_MESSAGE_LIMIT,
+  POLISH_MAX_OUTPUT_TOKENS,
+  POLISH_MIN_OUTPUT_TOKENS,
   POLISH_SYSTEM_PROMPT,
+  POLISH_TEMPERATURE,
+  TRANSCRIPT_BYTE_LIMIT,
   framePolishInput,
   parsePolishRequest,
+  polishOutputCap,
   polishTranscript,
   selectPolishContext,
 } from '../src/polish.ts'
@@ -118,7 +123,8 @@ describe('model transcript polishing', () => {
       provider: 'deepseek',
       model: 'chat',
       system: POLISH_SYSTEM_PROMPT,
-      maxTokens: 4096,
+      temperature: POLISH_TEMPERATURE,
+      maxTokens: polishOutputCap('深度求索哈尼斯'),
       sessionId: 'session-1',
     })
     const framed = options?.messages[0]?.content[0]?.text
@@ -126,6 +132,36 @@ describe('model transcript polishing', () => {
     expect(framed).toContain('当前项目叫 DeepSeek Harness')
     expect(framed).toContain('深度求索哈尼斯')
     expect(framed).toContain('DeepSeek Harness')
+  })
+
+  it('scales the output budget with the transcript and never exceeds the ceiling', () => {
+    expect(polishOutputCap('')).toBe(POLISH_MIN_OUTPUT_TOKENS)
+    expect(polishOutputCap('短句')).toBeLessThan(polishOutputCap('短句'.repeat(50)))
+    expect(polishOutputCap('字'.repeat(TRANSCRIPT_BYTE_LIMIT))).toBe(POLISH_MAX_OUTPUT_TOKENS)
+  })
+
+  it('keeps a transliteration repair that a character count would read as expansion', async () => {
+    const ctx = {
+      sessions: { get: vi.fn(() => ({ deriveMessages: () => [] })) },
+      llm: { stream: () => chunks('Access Token 需要重新申请。') },
+    }
+    await expect(polishTranscript(ctx as never, {
+      sessionId: 'session-1', provider: 'deepseek', model: 'chat',
+      transcript: '埃克塞斯脱肯得重新申请一下',
+      terms: [],
+    })).resolves.toEqual({ text: 'Access Token 需要重新申请。' })
+  })
+
+  it('falls back to the raw transcript when the model expands instead of polishing', async () => {
+    const ctx = {
+      sessions: { get: vi.fn(() => ({ deriveMessages: () => [] })) },
+      llm: { stream: () => chunks('经过仔细分析，'.repeat(40)) },
+    }
+    await expect(polishTranscript(ctx as never, {
+      sessionId: 'session-1', provider: 'deepseek', model: 'chat',
+      transcript: '这个方案大概可以，但是性能上还要再看看，缓存策略可能也要调整一下。',
+      terms: [],
+    })).rejects.toThrow('model polish output length departed from the transcript')
   })
 
   it('fails closed when the selected model returns no usable text', async () => {

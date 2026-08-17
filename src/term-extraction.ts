@@ -40,6 +40,8 @@ export interface TermExtractionHost {
 export const TERM_EXTRACTION_SYSTEM_PROMPT = [
   'Extract only useful proper nouns, named entities, product names, technical terms, and unusual Chinese or English vocabulary from the supplied visible text.',
   'Every returned term must be copied verbatim from the supplied Session or Composer text, ignoring letter case only.',
+  'Prefer terms that speech recognition is likely to get wrong: English technical terms and product names spoken inside Chinese sentences, transliterated proper nouns, identifiers, API and field names, and Chinese terms with common homophones.',
+  'Skip ordinary vocabulary that recognition would already get right.',
   'Do not infer, translate, normalize, complete, or invent a term. Do not return ordinary prose words.',
   `Return exactly one JSON object with exactly one key: {"terms":["term"]}. Return at most ${TERM_EXTRACTION_MODEL_TERM_LIMIT} terms, or an empty array when no useful terms are present.`,
   'Return JSON only. Do not use Markdown fences, commentary, or any additional keys.',
