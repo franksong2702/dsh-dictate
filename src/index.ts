@@ -7,9 +7,9 @@ import { parsePolishRequest, polishTranscript } from './polish.ts'
 import { parseContextTermsRequest } from './terms.ts'
 
 /** Cordis plugin name used by the profile bundle patch. */
-export const name = 'dsh-voice-input'
+export const name = 'dsh-contextual-dictation'
 
-/** Host services used by the browser-safe Voice Input RPC. */
+/** Host services used by the browser-safe Contextual Dictation RPC. */
 export const inject = ['connection', 'llm', 'sessions']
 
 /** Register trusted-host terminology and transcript-polishing endpoints. */
@@ -19,7 +19,7 @@ export function apply(ctx: Context): void {
     readonly llm: LlmRuntime
     readonly sessions: SessionStore
   }
-  ctx.effect(() => host.connection.rpc.handle('/voice-input', async (endpoint, payload, signal) => {
+  ctx.effect(() => host.connection.rpc.handle('/contextual-dictation', async (endpoint, payload, signal) => {
     try {
       if (endpoint === 'terms') {
         const request = parseContextTermsRequest(payload)
@@ -28,13 +28,13 @@ export function apply(ctx: Context): void {
         } }
       }
       if (endpoint !== 'polish') {
-        throw new Error(`unknown Voice Input endpoint: ${endpoint}`)
+        throw new Error(`unknown Contextual Dictation endpoint: ${endpoint}`)
       }
       const value = await polishTranscript(host, parsePolishRequest(payload), signal)
       return { ok: true, value }
     } catch (error: unknown) {
       if (signal.aborted) {
-        return { ok: false, error: { code: 'cancelled', message: 'Voice Input request was cancelled', details: {} } }
+        return { ok: false, error: { code: 'cancelled', message: 'Contextual Dictation request was cancelled', details: {} } }
       }
       return {
         ok: false,
@@ -45,5 +45,5 @@ export function apply(ctx: Context): void {
         },
       }
     }
-  }, { authority: 'trusted-host' }), 'voice-input: contextual terminology and model polish RPC')
+  }, { authority: 'trusted-host' }), 'contextual-dictation: contextual terminology and model polish RPC')
 }

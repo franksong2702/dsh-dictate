@@ -1,15 +1,15 @@
 {
-  "name": "dsh-voice-input",
+  "name": "dsh-contextual-dictation",
   "version": "0.3.0-alpha.9",
-  "description": "Manual browser speech-to-text input for DeepSeek Harness Web",
+  "description": "读取当前 Session 上下文的语音输入，让识别更准、转写更干净，发送权始终在你手上",
   "author": "Frank Song",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/franksong2702/dsh-voice-input.git"
+    "url": "git+https://github.com/franksong2702/dsh-contextual-dictation.git"
   },
-  "homepage": "https://github.com/franksong2702/dsh-voice-input#readme",
+  "homepage": "https://github.com/franksong2702/dsh-contextual-dictation#readme",
   "bugs": {
-    "url": "https://github.com/franksong2702/dsh-voice-input/issues"
+    "url": "https://github.com/franksong2702/dsh-contextual-dictation/issues"
   },
   "type": "module",
   "engines": {

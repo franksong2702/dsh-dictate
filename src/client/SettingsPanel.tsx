@@ -8,12 +8,12 @@ export interface ModelOption {
   readonly label: string
 }
 
-/** Read-only host inputs for the Voice Input settings card. */
+/** Read-only host inputs for the Contextual Dictation settings card. */
 export interface SettingsPanelProps {
   readonly modelOptions?: readonly ModelOption[]
 }
 
-/** Render the browser-local Voice Input card inside Plugin configuration. */
+/** Render the browser-local Contextual Dictation card inside Plugin configuration. */
 export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): ReactNode {
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
   const [open, setOpen] = useState(false)
@@ -31,7 +31,7 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
       <button
         type="button"
         aria-expanded={open}
-        aria-label={`${open ? '收起' : '展开'}：语音输入`}
+        aria-label={`${open ? '收起' : '展开'}：上下文语音输入`}
         onClick={() => { setOpen(value => !value) }}
         style={{
           width: '100%',
@@ -49,7 +49,7 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
         }}
       >
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <strong style={{ fontSize: 15, lineHeight: 1.4 }}>语音输入</strong>
+          <strong style={{ fontSize: 15, lineHeight: 1.4 }}>上下文语音输入</strong>
           <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 13, lineHeight: 1.5 }}>
             把语音实时转写到 Composer，并结合当前上下文优化识别和润色。
           </span>
@@ -79,12 +79,12 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
             识别和行为开关保存在当前浏览器中；动态词汇仅用于本次录音，不会保存。
           </p>
           <label
-            htmlFor="voice-input-language"
+            htmlFor="contextual-dictation-language"
             style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
           >
             <span>识别语言</span>
             <select
-              id="voice-input-language"
+              id="contextual-dictation-language"
               value={prefs.lang}
               onChange={event => { updatePrefs({ lang: event.currentTarget.value }) }}
               style={{
@@ -106,11 +106,11 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
           {prefs.lang.startsWith('zh-') ? (
             <div style={{ display: 'grid', gap: 8, marginTop: 12, maxWidth: 520 }}>
               <label
-                htmlFor="voice-input-mixed-language-optimization"
+                htmlFor="contextual-dictation-mixed-language-optimization"
                 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
               >
                 <input
-                  id="voice-input-mixed-language-optimization"
+                  id="contextual-dictation-mixed-language-optimization"
                   type="checkbox"
                   checked={prefs.mixedLanguageOptimizationEnabled}
                   onChange={event => {
@@ -126,11 +126,11 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
           ) : null}
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
-              htmlFor="voice-input-composer-shortcut"
+              htmlFor="contextual-dictation-composer-shortcut"
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
             >
               <input
-                id="voice-input-composer-shortcut"
+                id="contextual-dictation-composer-shortcut"
                 type="checkbox"
                 checked={prefs.composerShortcutEnabled}
                 onChange={event => { updatePrefs({ composerShortcutEnabled: event.currentTarget.checked }) }}
@@ -143,11 +143,11 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
           </div>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
-              htmlFor="voice-input-model-polish"
+              htmlFor="contextual-dictation-model-polish"
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
             >
               <input
-                id="voice-input-model-polish"
+                id="contextual-dictation-model-polish"
                 type="checkbox"
                 checked={prefs.modelPolishEnabled}
                 onChange={event => { updatePrefs({ modelPolishEnabled: event.currentTarget.checked }) }}
@@ -164,12 +164,12 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
                 </p>
               ) : (
                 <label
-                  htmlFor="voice-input-polish-model"
+                  htmlFor="contextual-dictation-polish-model"
                   style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 500 }}
                 >
                   <span>润色模型</span>
                   <select
-                    id="voice-input-polish-model"
+                    id="contextual-dictation-polish-model"
                     value={prefs.selectedModel}
                     onChange={event => { updatePrefs({ selectedModel: event.currentTarget.value }) }}
                     style={{
@@ -194,11 +194,11 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
           </div>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
-              htmlFor="voice-input-auto-send"
+              htmlFor="contextual-dictation-auto-send"
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
             >
               <input
-                id="voice-input-auto-send"
+                id="contextual-dictation-auto-send"
                 type="checkbox"
                 checked={prefs.autoSendEnabled}
                 onChange={event => { updatePrefs({ autoSendEnabled: event.currentTarget.checked }) }}

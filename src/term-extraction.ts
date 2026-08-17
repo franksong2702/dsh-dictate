@@ -178,7 +178,7 @@ async function extractWithModel(
   const callSignal = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
   const assembler = new BlockAssembler()
   const messages: Message[] = [createUserMessage({
-    source: { kind: 'plugin', plugin: 'dsh-voice-input' },
+    source: { kind: 'plugin', plugin: 'dsh-contextual-dictation' },
     content: [{ type: 'text', text: frameTermExtractionInput(input.sources) }],
   })]
   for await (const chunk of llm.stream({

@@ -4,7 +4,7 @@ export interface LanguageOption {
   readonly label: string
 }
 
-/** Languages exposed by the Voice Input settings page. */
+/** Languages exposed by the Contextual Dictation settings page. */
 export const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
   { value: 'zh-CN', label: '中文（普通话）' },
   { value: 'zh-HK', label: '中文（粤语）' },
@@ -18,7 +18,7 @@ export const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
   { value: 'ru-RU', label: 'Русский' },
 ]
 
-/** Browser-local Voice Input preferences. */
+/** Browser-local Contextual Dictation preferences. */
 export interface VoiceInputPrefs {
   readonly lang: string
   readonly mixedLanguageOptimizationEnabled: boolean
@@ -36,7 +36,7 @@ export const DEFAULT_PREFS: VoiceInputPrefs = {
   selectedModel: '',
   autoSendEnabled: false,
 }
-export const PREFS_KEY = 'dsh-voice-input.prefs.v1'
+export const PREFS_KEY = 'dsh-contextual-dictation.prefs.v1'
 
 const languageValues = new Set(LANGUAGE_OPTIONS.map(option => option.value))
 const listeners = new Set<() => void>()
@@ -99,7 +99,7 @@ export function loadPrefs(): VoiceInputPrefs {
   return currentPrefs
 }
 
-/** Persist browser-local Voice Input preferences and notify mounted surfaces. */
+/** Persist browser-local Contextual Dictation preferences and notify mounted surfaces. */
 export function updatePrefs(patch: Partial<VoiceInputPrefs>): VoiceInputPrefs {
   const next = normalizePrefs({ ...loadPrefs(), ...patch })
   currentPrefs = next

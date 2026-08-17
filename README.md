@@ -1,4 +1,4 @@
-# dsh-voice-input
+# dsh-contextual-dictation
 
 ![声音波形进入 Composer 并转化为文字](docs/images/voice-input-hero.jpg)
 
@@ -35,7 +35,7 @@
 
 ![DSH Composer 工具栏中的语音输入按钮](docs/images/composer-voice-entry.jpg)
 
-语言、中英混合识别优化、Composer 录音快捷键、模型润色和自动发送统一放在“设置 → 插件 → 插件配置 → 语音输入”中，不增加独立设置 Tab。
+语言、中英混合识别优化、Composer 录音快捷键、模型润色和自动发送统一放在“设置 → 插件 → 插件配置 → 上下文语音输入”中，不增加独立设置 Tab。
 
 <p align="center">
   <img src="docs/images/voice-input-settings.jpg" alt="语音输入插件配置，包含识别语言、自动发送和模型润色" width="620">
@@ -53,7 +53,7 @@
 
 ## 配置与数据范围
 
-- 在“设置 → 插件 → 插件配置”的“语音输入”卡片中选择识别语言；设置保存在当前浏览器中。
+- 在“设置 → 插件 → 插件配置”的“上下文语音输入”卡片中选择识别语言；设置保存在当前浏览器中。
 - 选择普通话、粤语或繁体中文时，可以启用“优化中英混合识别”。插件会从当前 Session 最近的可见用户/Assistant 文本和 Composer 草稿中提取受限的临时词汇；系统提示词、工具调用、工具结果、图片和 Assistant 推理内容不会参与提取。
 - 浏览器支持 contextual phrases 时，插件会优先保留完整专有短语、剔除重叠碎片，并按 Composer、最近上下文和重复次数分配 2–6 的临时权重；不支持或拒绝短语增强时自动使用普通识别，不中断录音。
 - 启用模型润色时，所选模型会在录音前后台提取当前 Session 和 Composer 中可追溯的相关词汇，并与规则词汇合并；同一批临时词汇会作为提示连同原始转写和最近的会话文本发送给所选模型提供商。词汇只用于本次录音，不会持久化；录音启动不等待后台提取。
@@ -72,10 +72,10 @@
 
 ## 安装
 
-下载 GitHub Release 中的 `dsh-voice-input-0.3.0-alpha.9.tgz`，安装到 Web profile，然后重启对应的 `dsh web` 进程：
+下载 GitHub Release 中的 `dsh-contextual-dictation-0.3.0-alpha.9.tgz`，安装到 Web profile，然后重启对应的 `dsh web` 进程：
 
 ```sh
-dsh plugin --profile web add ./dsh-voice-input-0.3.0-alpha.9.tgz
+dsh plugin --profile web add ./dsh-contextual-dictation-0.3.0-alpha.9.tgz
 ```
 
 ## 开发

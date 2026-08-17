@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-const work = await mkdtemp(join(tmpdir(), 'dsh-voice-input-package-'))
+const work = await mkdtemp(join(tmpdir(), 'dsh-contextual-dictation-package-'))
 const packedNodeModules = join(work, 'unpack', 'package', 'node_modules')
 
 function run(command, args, cwd = root) {
@@ -49,7 +49,7 @@ try {
   if ('default' in plugin) throw new Error('packed host entry must not have a default export')
 
   const client = await readFile(join(packedRoot, 'lib/client.js'), 'utf8')
-  if (!client.includes('window.__ModuleLoader__.load({') || !client.includes('id: "dsh-voice-input"')) {
+  if (!client.includes('window.__ModuleLoader__.load({') || !client.includes('id: "dsh-contextual-dictation"')) {
     throw new Error('packed client entry is missing the DSH module-loader wrapper')
   }
 

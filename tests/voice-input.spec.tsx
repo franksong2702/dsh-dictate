@@ -92,7 +92,7 @@ function voiceComposer(props: ComponentProps<typeof VoiceInputButton>): ReactNod
   </div>
 }
 
-describe('Voice Input browser plugin', () => {
+describe('Contextual Dictation browser plugin', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     FakeRecognition.instances = []
@@ -131,7 +131,7 @@ describe('Voice Input browser plugin', () => {
     ])
     expect(register.mock.calls[2]?.[0]).toMatchObject({
       name: 'settings.plugin.item',
-      id: 'voice-input',
+      id: 'contextual-dictation',
     })
   })
 
@@ -161,7 +161,7 @@ describe('Voice Input browser plugin', () => {
     expect(Settings).toBeDefined()
     render(Settings === undefined ? null : <Settings />)
     await act(async () => { await Promise.resolve() })
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '启用模型润色' }))
 
     expect(screen.getByLabelText('润色模型')).not.toBeNull()
@@ -171,7 +171,7 @@ describe('Voice Input browser plugin', () => {
 
   it('uses host theme tokens without a fixed dark fallback', () => {
     render(<SettingsPanel />)
-    const disclosure = screen.getByRole('button', { name: '展开：语音输入' })
+    const disclosure = screen.getByRole('button', { name: '展开：上下文语音输入' })
     expect(disclosure.querySelector('svg')).not.toBeNull()
     expect(disclosure.textContent).not.toContain('▾')
     expect(disclosure.textContent).toContain('把语音实时转写到 Composer，并结合当前上下文优化识别和润色。')
@@ -185,16 +185,16 @@ describe('Voice Input browser plugin', () => {
 
   it('persists a language selected on the settings page', () => {
     const first = render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     fireEvent.change(screen.getByLabelText('识别语言'), { target: { value: 'ja-JP' } })
     expect(loadPrefs().lang).toBe('ja-JP')
-    expect(window.localStorage.getItem('dsh-voice-input.prefs.v1')).toBe(
+    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
       '{"lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
 
     first.unmount()
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     expect((screen.getByLabelText('识别语言') as HTMLSelectElement).value).toBe('ja-JP')
   })
 
@@ -219,7 +219,7 @@ describe('Voice Input browser plugin', () => {
 
   it('shows mixed-language optimization for every Chinese language and preserves it while inactive', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     const language = screen.getByLabelText('识别语言')
 
     for (const value of ['zh-CN', 'zh-HK', 'zh-TW']) {
@@ -241,7 +241,7 @@ describe('Voice Input browser plugin', () => {
       { value: 'deepseek-chat', label: 'DeepSeek Chat' },
       { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
     ]} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
 
     expect(screen.getByText('所选模型会根据当前 Session 和 Composer 提取相关词汇，提高语音识别和转写润色的准确度。')).not.toBeNull()
     expect((screen.getByRole('checkbox', { name: '启用模型润色' }) as HTMLInputElement).checked).toBe(false)
@@ -252,14 +252,14 @@ describe('Voice Input browser plugin', () => {
     fireEvent.change(screen.getByLabelText('润色模型'), { target: { value: 'deepseek-reasoner' } })
 
     expect(loadPrefs().selectedModel).toBe('deepseek-reasoner')
-    expect(window.localStorage.getItem('dsh-voice-input.prefs.v1')).toBe(
+    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
       '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
     )
   })
 
   it('keeps automatic sending off by default and persists explicit opt-in', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
 
     const toggle = screen.getByRole('checkbox', { name: '自动发送转写结果（Beta）' }) as HTMLInputElement
     expect(toggle.checked).toBe(false)
@@ -269,14 +269,14 @@ describe('Voice Input browser plugin', () => {
 
     fireEvent.click(toggle)
     expect(loadPrefs().autoSendEnabled).toBe(true)
-    expect(window.localStorage.getItem('dsh-voice-input.prefs.v1')).toBe(
+    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
       '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
     )
   })
 
   it('keeps the Composer shortcut off by default and persists explicit opt-in', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
 
     const shortcut = screen.getByRole('checkbox', { name: '启用 Composer 录音快捷键' }) as HTMLInputElement
     expect(shortcut.checked).toBe(false)
@@ -284,14 +284,14 @@ describe('Voice Input browser plugin', () => {
 
     fireEvent.click(shortcut)
     expect(loadPrefs().composerShortcutEnabled).toBe(true)
-    expect(window.localStorage.getItem('dsh-voice-input.prefs.v1')).toBe(
+    expect(window.localStorage.getItem('dsh-contextual-dictation.prefs.v1')).toBe(
       '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
   })
 
   it('reports that polishing models are unavailable when the host list is empty', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '启用模型润色' }))
 
     expect(screen.getByText('暂无可用模型')).not.toBeNull()
