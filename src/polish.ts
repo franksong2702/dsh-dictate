@@ -6,6 +6,7 @@ import {
   type Message,
 } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionStore } from '@deepseek-ai/dsh-session'
+import { parseContextTerms, type ContextTerm } from './terms.ts'
 
 /** Maximum finalized user/assistant messages supplied as terminology context. */
 export const CONTEXT_MESSAGE_LIMIT = 6
@@ -30,6 +31,7 @@ export interface PolishRequest {
   readonly provider: string
   readonly model: string
   readonly transcript: string
+  readonly terms: readonly ContextTerm[]
 }
 
 /** Exact client result returned after a successful model call. */
@@ -43,6 +45,7 @@ const encoder = new TextEncoder()
 export const POLISH_SYSTEM_PROMPT = [
   'Polish a speech-to-text transcript without changing what the speaker means.',
   'Use the reference conversation only to resolve names, terminology, pronouns, and obvious recognition errors.',
+  'Treat context terms as hints, not facts. Use them only when supported by the transcript or reference conversation.',
   'Preserve the transcript language, facts, intent, tone, and level of detail.',
   'Do not answer the transcript, continue the conversation, add new information, or mention the reference conversation.',
   'Return only the polished transcript as plain text, with no prefix, explanation, quotation marks, or Markdown fence.',
@@ -102,8 +105,16 @@ export function selectPolishContext(messages: readonly Message[]): PolishContext
 }
 
 /** Frame context and transcript as JSON so dictated text cannot escape its data field. */
-export function framePolishInput(context: readonly PolishContextMessage[], transcript: string): string {
-  return `Polish the transcript in this JSON object:\n${JSON.stringify({ referenceConversation: context, transcript })}`
+export function framePolishInput(
+  context: readonly PolishContextMessage[],
+  transcript: string,
+  terms: readonly ContextTerm[],
+): string {
+  return `Polish the transcript in this JSON object:\n${JSON.stringify({
+    referenceConversation: context,
+    contextTerms: terms,
+    transcript,
+  })}`
 }
 
 /** Validate the untyped Connection RPC payload. */
@@ -123,6 +134,7 @@ export function parsePolishRequest(payload: unknown): PolishRequest {
     provider: value.provider as string,
     model: value.model as string,
     transcript: (value.transcript as string).trim(),
+    terms: parseContextTerms((payload as { readonly terms?: unknown }).terms),
   }
 }
 
@@ -158,7 +170,7 @@ export async function polishTranscript(
   const callSignal = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
   const messages: Message[] = [createUserMessage({
     source: { kind: 'plugin', plugin: 'dsh-voice-input' },
-    content: [{ type: 'text', text: framePolishInput(context, request.transcript) }],
+    content: [{ type: 'text', text: framePolishInput(context, request.transcript, request.terms) }],
   })]
   for await (const chunk of ctx.llm.stream({
     provider: request.provider,

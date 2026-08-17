@@ -21,6 +21,8 @@ export const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
 /** Browser-local Voice Input preferences. */
 export interface VoiceInputPrefs {
   readonly lang: string
+  readonly mixedLanguageOptimizationEnabled: boolean
+  readonly composerShortcutEnabled: boolean
   readonly modelPolishEnabled: boolean
   readonly selectedModel: string
   readonly autoSendEnabled: boolean
@@ -28,6 +30,8 @@ export interface VoiceInputPrefs {
 
 export const DEFAULT_PREFS: VoiceInputPrefs = {
   lang: 'zh-CN',
+  mixedLanguageOptimizationEnabled: false,
+  composerShortcutEnabled: false,
   modelPolishEnabled: false,
   selectedModel: '',
   autoSendEnabled: false,
@@ -52,6 +56,8 @@ export function normalizePrefs(raw: unknown): VoiceInputPrefs {
   if (typeof raw !== 'object' || raw === null || !('lang' in raw)) return DEFAULT_PREFS
   const candidate = raw as {
     lang?: unknown
+    mixedLanguageOptimizationEnabled?: unknown
+    composerShortcutEnabled?: unknown
     modelPolishEnabled?: unknown
     selectedModel?: unknown
     autoSendEnabled?: unknown
@@ -59,6 +65,12 @@ export function normalizePrefs(raw: unknown): VoiceInputPrefs {
   if (typeof candidate.lang !== 'string' || !languageValues.has(candidate.lang)) return DEFAULT_PREFS
   return {
     lang: candidate.lang,
+    mixedLanguageOptimizationEnabled: typeof candidate.mixedLanguageOptimizationEnabled === 'boolean'
+      ? candidate.mixedLanguageOptimizationEnabled
+      : DEFAULT_PREFS.mixedLanguageOptimizationEnabled,
+    composerShortcutEnabled: typeof candidate.composerShortcutEnabled === 'boolean'
+      ? candidate.composerShortcutEnabled
+      : DEFAULT_PREFS.composerShortcutEnabled,
     modelPolishEnabled: typeof candidate.modelPolishEnabled === 'boolean'
       ? candidate.modelPolishEnabled
       : DEFAULT_PREFS.modelPolishEnabled,
