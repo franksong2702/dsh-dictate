@@ -7,7 +7,6 @@ import {
   POLISH_MAX_OUTPUT_TOKENS,
   POLISH_MIN_OUTPUT_TOKENS,
   POLISH_SYSTEM_PROMPT,
-  POLISH_TEMPERATURE,
   TRANSCRIPT_BYTE_LIMIT,
   framePolishInput,
   parsePolishRequest,
@@ -123,10 +122,10 @@ describe('model transcript polishing', () => {
       provider: 'deepseek',
       model: 'chat',
       system: POLISH_SYSTEM_PROMPT,
-      temperature: POLISH_TEMPERATURE,
       maxTokens: polishOutputCap('深度求索哈尼斯'),
       sessionId: 'session-1',
     })
+    expect(options).not.toHaveProperty('temperature')
     const framed = options?.messages[0]?.content[0]?.text
     expect(framed).toContain('我们在做语音输入插件')
     expect(framed).toContain('当前项目叫 DeepSeek Harness')

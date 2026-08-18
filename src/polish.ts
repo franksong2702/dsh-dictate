@@ -20,8 +20,6 @@ export const POLISH_MAX_OUTPUT_TOKENS = 4096
 export const POLISH_MIN_OUTPUT_TOKENS = 128
 /** Headroom over the estimated transcript token count. Polishing is not expansion. */
 export const POLISH_OUTPUT_TOKEN_RATIO = 1.5
-/** Sampling temperature. Polishing is a rewrite task; high temperature reads as expansion. */
-export const POLISH_TEMPERATURE = 0.2
 /** Reject polished text longer than this multiple of the transcript's UTF-8 size. */
 export const POLISH_MAX_LENGTH_RATIO = 2
 /** Reject polished text shorter than this multiple of the transcript's UTF-8 size. */
@@ -290,7 +288,6 @@ export async function polishTranscript(
     model: request.model,
     messages,
     system: POLISH_SYSTEM_PROMPT,
-    temperature: POLISH_TEMPERATURE,
     maxTokens: polishOutputCap(request.transcript),
     sessionId,
     signal: callSignal,
