@@ -43,7 +43,7 @@ try {
   await symlink(join(root, 'node_modules'), packedNodeModules, process.platform === 'win32' ? 'junction' : 'dir')
   const plugin = await import(`${pathToFileURL(join(packedRoot, 'lib/index.js')).href}?verify=${Date.now()}`)
   const exports = Object.keys(plugin).sort()
-  if (JSON.stringify(exports) !== JSON.stringify(['apply', 'inject', 'name'])) {
+  if (JSON.stringify(exports) !== JSON.stringify(['Config', 'apply', 'inject', 'name'])) {
     throw new Error(`unexpected host exports: ${exports.join(', ')}`)
   }
   if ('default' in plugin) throw new Error('packed host entry must not have a default export')
