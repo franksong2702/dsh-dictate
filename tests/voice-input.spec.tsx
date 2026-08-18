@@ -131,8 +131,10 @@ describe('Contextual Dictation browser plugin', () => {
     ])
     expect(register.mock.calls[2]?.[0]).toMatchObject({
       name: 'settings.plugin.item',
-      id: 'dictate',
+      key: 'dictate',
     })
+    expect(register.mock.calls[2]?.[0]).not.toHaveProperty('id')
+    expect(register.mock.calls[2]?.[0]).not.toHaveProperty('order')
   })
 
   it('loads the current host model catalog for the polishing selector', async () => {

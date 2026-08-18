@@ -65,17 +65,17 @@
 
 ## 兼容性与 Alpha 限制
 
-- 当前面向 DSH `0.1.0-rc.6`。
+- 当前面向 DSH `0.1.0-rc.7`。
 - 需要 Chrome 或 Edge 的 Web Speech API，并在首次使用时授予浏览器麦克风权限。
 - 中英混合识别优化依赖浏览器及当前语音识别服务对 Web Speech contextual phrases 的支持；不支持时仍保留现有识别与模型润色流程。
 - 当前 DSH 尚未为外部插件开放自定义辅助模型请求的 Session 日志事件。插件辅助模型调用（词汇提取与润色）使用自己的受信 RPC，不会写入 DSH Session 日志；上游提供相应扩展点后应迁移到可重建的日志事件。
 
 ## 安装
 
-下载 GitHub Release 中的 `dsh-dictate-0.4.0-alpha.1.tgz`，安装到 Web profile，然后重启对应的 `dsh web` 进程：
+下载 GitHub Release 中的 `dsh-dictate-0.4.0-alpha.2.tgz`，安装到 Web profile，然后重启对应的 `dsh web` 进程：
 
 ```sh
-dsh plugin --profile web add ./dsh-dictate-0.4.0-alpha.1.tgz
+dsh plugin --profile web add ./dsh-dictate-0.4.0-alpha.2.tgz
 ```
 
 ## 开发

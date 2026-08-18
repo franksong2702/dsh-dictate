@@ -12,6 +12,7 @@ import {
   type ContextTerm,
   type ContextTermsRequest,
 } from '../terms.ts'
+import { DICTATE_SETTINGS_NAMESPACE } from '../settings-contract.ts'
 
 interface InputActions {
   setDraft(text: string): void
@@ -173,8 +174,7 @@ export function apply(ctx: ClientContext): void {
   }, props => <TranscriptionDock sessionId={(props as VoiceInputProps).sessionId} />))
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
-    id: 'dictate',
-    order: 115,
+    key: DICTATE_SETTINGS_NAMESPACE,
   }, () => <VoiceInputSettings loadModels={loadModels} />))
 }
 

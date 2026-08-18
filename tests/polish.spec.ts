@@ -183,6 +183,7 @@ describe('model transcript polishing', () => {
     })
     const ctx = {
       effect: (register: () => unknown) => register(),
+      inject: vi.fn(),
       connection: { rpc: { handle } },
       sessions: { get: vi.fn(() => ({ deriveMessages: () => [] })) },
       llm: { stream: () => chunks('润色结果') },
@@ -190,6 +191,7 @@ describe('model transcript polishing', () => {
     apply(ctx as never)
 
     expect(handle).toHaveBeenCalledWith('/dictate', expect.any(Function), { authority: 'trusted-host' })
+    expect(ctx.inject).toHaveBeenCalledWith(['settings'], expect.any(Function))
     const signal = new AbortController().signal
     const termsResult = await handler?.('terms', {
       sessionId: 'session-1', draft: '在 `Codex` 中输入', includeInferred: true,
