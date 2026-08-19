@@ -51,7 +51,7 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <strong style={{ fontSize: 15, lineHeight: 1.4 }}>上下文语音输入</strong>
           <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 13, lineHeight: 1.5 }}>
-            把语音实时转写到 Composer，并结合当前上下文优化识别和润色。
+            把语音转写到 Composer，并结合当前上下文优化识别和润色。
           </span>
         </span>
         <span
@@ -79,8 +79,69 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
             识别和行为开关保存在当前浏览器中；动态词汇仅用于本次录音，不会保存。
           </p>
           <label
-            htmlFor="dictate-language"
+            htmlFor="dictate-transcription-provider"
             style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
+          >
+            <span>转写方式</span>
+            <select
+              id="dictate-transcription-provider"
+              value={prefs.transcriptionProvider}
+              onChange={event => {
+                updatePrefs({
+                  transcriptionProvider: event.currentTarget.value === 'local-endpoint'
+                    ? 'local-endpoint'
+                    : 'web-speech',
+                })
+              }}
+              style={{
+                width: '100%',
+                height: 34,
+                border: '1px solid var(--dsw-alias-border-l2)',
+                borderRadius: 8,
+                padding: '0 12px',
+                background: 'var(--dsw-alias-bg-layer-3)',
+                color: 'var(--dsw-alias-label-primary)',
+                font: 'inherit',
+              }}
+            >
+              <option value="web-speech">浏览器语音识别（默认）</option>
+              <option value="local-endpoint">本地服务端点（实验性）</option>
+            </select>
+          </label>
+          {prefs.transcriptionProvider === 'local-endpoint' ? (
+            <div style={{ display: 'grid', gap: 8, marginTop: 12, maxWidth: 520 }}>
+              <label
+                htmlFor="dictate-local-endpoint"
+                style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
+              >
+                <span>本地服务地址</span>
+                <input
+                  id="dictate-local-endpoint"
+                  type="url"
+                  value={prefs.localEndpoint}
+                  onChange={event => { updatePrefs({ localEndpoint: event.currentTarget.value }) }}
+                  spellCheck={false}
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    height: 34,
+                    border: '1px solid var(--dsw-alias-border-l2)',
+                    borderRadius: 8,
+                    padding: '0 12px',
+                    background: 'var(--dsw-alias-bg-layer-3)',
+                    color: 'var(--dsw-alias-label-primary)',
+                    font: 'inherit',
+                  }}
+                />
+              </label>
+              <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+                录音结束后发送到本机 SenseVoice 服务；不会在浏览器中下载模型。服务需单独启动，并允许当前 DSH 地址跨域访问。
+              </p>
+            </div>
+          ) : null}
+          <label
+            htmlFor="dictate-language"
+            style={{ display: 'grid', gap: 6, maxWidth: 360, marginTop: 14, fontSize: 13, fontWeight: 500 }}
           >
             <span>识别语言</span>
             <select
@@ -120,7 +181,9 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
                 <span>优化中英混合识别</span>
               </label>
               <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-                根据当前 Session 和 Composer 中出现的英文词、缩写和专有名词，提高 Web Speech 识别和模型润色的准确度。词汇仅用于本次录音，不会持久化；浏览器不支持时使用普通识别。
+                {prefs.transcriptionProvider === 'web-speech'
+                  ? '根据当前 Session 和 Composer 中出现的英文词、缩写和专有名词，提高 Web Speech 识别和模型润色的准确度。词汇仅用于本次录音，不会持久化；浏览器不支持时使用普通识别。'
+                  : '根据当前 Session 和 Composer 中出现的英文词、缩写和专有名词，提高后续模型润色的准确度。SenseVoice 端点当前不接收动态词汇。'}
               </p>
             </div>
           ) : null}

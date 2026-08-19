@@ -1,6 +1,7 @@
 /** Lifecycle phases exposed by the live transcription surface. */
 export type TranscriptionPhase =
   | 'idle'
+  | 'preparing'
   | 'listening'
   | 'finalizing'
   | 'polishing'

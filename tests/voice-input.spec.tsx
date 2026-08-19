@@ -13,6 +13,7 @@ import {
 } from '../src/client/index.tsx'
 import { loadPrefs, normalizePrefs, updatePrefs } from '../src/client/prefs.ts'
 import type { ContextTerm } from '../src/terms.ts'
+import type { AsrProvider, AsrProviderStartOptions } from '../src/client/asrProvider.ts'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconChevronDownOutline14: () => <svg data-testid="native-chevron" />,
@@ -101,6 +102,8 @@ describe('Contextual Dictation browser plugin', () => {
     window.SpeechRecognition = FakeRecognition
     window.SpeechRecognitionPhrase = undefined
     updatePrefs({
+      transcriptionProvider: 'web-speech',
+      localEndpoint: 'http://127.0.0.1:39081',
       lang: 'zh-CN',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
@@ -176,7 +179,7 @@ describe('Contextual Dictation browser plugin', () => {
     const disclosure = screen.getByRole('button', { name: '展开：上下文语音输入' })
     expect(disclosure.querySelector('svg')).not.toBeNull()
     expect(disclosure.textContent).not.toContain('▾')
-    expect(disclosure.textContent).toContain('把语音实时转写到 Composer，并结合当前上下文优化识别和润色。')
+    expect(disclosure.textContent).toContain('把语音转写到 Composer，并结合当前上下文优化识别和润色。')
     fireEvent.click(disclosure)
     const select = screen.getByLabelText('识别语言') as HTMLSelectElement
 
@@ -191,7 +194,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.change(screen.getByLabelText('识别语言'), { target: { value: 'ja-JP' } })
     expect(loadPrefs().lang).toBe('ja-JP')
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
 
     first.unmount()
@@ -202,6 +205,8 @@ describe('Contextual Dictation browser plugin', () => {
 
   it('normalizes legacy language-only preferences and new model fields', () => {
     expect(normalizePrefs({ lang: 'ja-JP' })).toEqual({
+      transcriptionProvider: 'web-speech',
+      localEndpoint: 'http://127.0.0.1:39081',
       lang: 'ja-JP',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
@@ -210,12 +215,35 @@ describe('Contextual Dictation browser plugin', () => {
       autoSendEnabled: false,
     })
     expect(normalizePrefs({ lang: 'en-US', modelPolishEnabled: true, selectedModel: 'deepseek-chat' })).toEqual({
+      transcriptionProvider: 'web-speech',
+      localEndpoint: 'http://127.0.0.1:39081',
       lang: 'en-US',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
       modelPolishEnabled: true,
       selectedModel: 'deepseek-chat',
       autoSendEnabled: false,
+    })
+  })
+
+  it('keeps Web Speech as default and persists the optional local endpoint route', () => {
+    render(<SettingsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    const provider = screen.getByLabelText('转写方式') as HTMLSelectElement
+
+    expect(provider.value).toBe('web-speech')
+    expect(screen.queryByLabelText('本地服务地址')).toBeNull()
+    fireEvent.change(provider, { target: { value: 'local-endpoint' } })
+
+    const endpoint = screen.getByLabelText('本地服务地址') as HTMLInputElement
+    expect(endpoint.value).toBe('http://127.0.0.1:39081')
+    expect(screen.getByText(/不会在浏览器中下载模型/)).not.toBeNull()
+    fireEvent.change(endpoint, { target: { value: '' } })
+    expect((screen.getByLabelText('本地服务地址') as HTMLInputElement).value).toBe('')
+    fireEvent.change(endpoint, { target: { value: 'http://localhost:41000/v1' } })
+    expect(loadPrefs()).toMatchObject({
+      transcriptionProvider: 'local-endpoint',
+      localEndpoint: 'http://localhost:41000/v1',
     })
   })
 
@@ -255,7 +283,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(loadPrefs().selectedModel).toBe('deepseek-reasoner')
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
     )
   })
 
@@ -272,7 +300,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(toggle)
     expect(loadPrefs().autoSendEnabled).toBe(true)
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
     )
   })
 
@@ -287,7 +315,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(shortcut)
     expect(loadPrefs().composerShortcutEnabled).toBe(true)
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
   })
 
@@ -330,6 +358,71 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.queryByRole('status')).not.toBeNull()
     act(() => { vi.advanceTimersByTime(1) })
     expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('uses the local endpoint through the same Composer and explicit auto-send flow', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint', autoSendEnabled: true })
+    let callbacks: AsrProviderStartOptions | undefined
+    const stop = vi.fn(async () => {
+      callbacks?.onStatus?.('stopping')
+      callbacks?.onProgress?.({ phase: 'runtime', message: '正在由本地服务转写' })
+      callbacks?.onFinal?.('本地端点结果')
+      callbacks?.onEnd?.('stop')
+    })
+    const provider: AsrProvider = {
+      start: vi.fn((options = {}) => {
+        callbacks = options
+        options.onStart?.()
+        return {
+          stop,
+          abort: vi.fn(async () => { options.onEnd?.('abort') }),
+          updateTerms: vi.fn(async () => {}),
+        }
+      }),
+    }
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    render(voiceSurfaces({
+      inputActions: { setDraft, submit },
+      input: { draft: '已有文字' },
+      sessionId: 'local-session',
+      providers: { 'local-endpoint': provider },
+    }))
+
+    const button = screen.getByRole('button', { name: '语音输入' })
+    fireEvent.click(button)
+    expect(FakeRecognition.instances).toHaveLength(0)
+    expect(button.getAttribute('title')).toBe('点击结束并转写')
+    expect(screen.getByRole('status').textContent).toContain('正在录音')
+    expect(setDraft).not.toHaveBeenCalled()
+
+    await act(async () => { fireEvent.click(button); await Promise.resolve() })
+    expect(stop).toHaveBeenCalledOnce()
+    expect(setDraft).toHaveBeenCalledWith('已有文字 本地端点结果')
+    expect(submit).toHaveBeenCalledOnce()
+    expect(screen.getByRole('status').textContent).toContain('转写结果已交给 DSH 发送')
+  })
+
+  it('shows a readable local endpoint startup failure', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    const provider: AsrProvider = {
+      start: () => Promise.reject({
+        code: 'endpoint-invalid',
+        message: '本地服务地址必须使用 localhost 或回环地址',
+      }),
+    }
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'local-error',
+      providers: { 'local-endpoint': provider },
+    }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('alert').textContent).toContain('本地服务地址必须使用 localhost 或回环地址')
   })
 
   it('injects temporary context terms into supported Chinese recognition and model polishing', async () => {
@@ -540,7 +633,7 @@ describe('Contextual Dictation browser plugin', () => {
     const second = FakeRecognition.instances[1]
     expect(second?.startCalls).toBe(1)
     expect(second?.phrases).toEqual([])
-    expect(loadContextTerms).toHaveBeenCalledTimes(2)
+    expect(loadContextTerms).toHaveBeenCalledOnce()
   })
 
   it('uses right Command on macOS', () => {

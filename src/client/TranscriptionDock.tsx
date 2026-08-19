@@ -12,8 +12,9 @@ export interface TranscriptionDockProps {
 
 function phaseTitle(snapshot: TranscriptionSnapshot): string {
   switch (snapshot.phase) {
-    case 'listening': return '正在听写'
-    case 'finalizing': return '正在确认文字'
+    case 'preparing': return snapshot.status || '正在准备录音'
+    case 'listening': return snapshot.status || '正在听写'
+    case 'finalizing': return snapshot.status || '正在确认文字'
     case 'polishing': return '模型润色中'
     case 'complete':
     case 'error':
@@ -28,9 +29,11 @@ function phaseTitle(snapshot: TranscriptionSnapshot): string {
 }
 
 function textPreview(snapshot: TranscriptionSnapshot): ReactNode {
-  if (snapshot.phase === 'listening' || snapshot.phase === 'finalizing') {
+  if (snapshot.phase === 'preparing' || snapshot.phase === 'listening' || snapshot.phase === 'finalizing') {
     if (snapshot.finalText === '' && snapshot.interimText === '') {
-      return <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>请开始说话…</span>
+      return snapshot.phase === 'preparing'
+        ? null
+        : <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>请开始说话…</span>
     }
     return (
       <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>

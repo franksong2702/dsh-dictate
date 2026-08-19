@@ -1,6 +1,6 @@
 {
   "name": "dsh-dictate",
-  "version": "0.4.0-alpha.2",
+  "version": "0.4.0-alpha.3",
   "description": "读取当前 Session 上下文的语音输入，让识别更准、转写更干净，发送权始终在你手上",
   "author": "Frank Song",
   "repository": {
