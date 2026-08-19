@@ -247,6 +247,51 @@ describe('Contextual Dictation browser plugin', () => {
     })
   })
 
+  it('checks, starts, and stops the managed local service from plugin settings', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    const status = vi.fn(async () => ({
+      phase: 'stopped' as const,
+      endpoint: 'http://127.0.0.1:39081',
+      managed: false,
+      message: '本地服务未启动',
+    }))
+    const start = vi.fn(async () => ({
+      phase: 'running' as const,
+      endpoint: 'http://127.0.0.1:39081',
+      managed: true,
+      message: '本地 SenseVoice 服务运行中',
+    }))
+    const stop = vi.fn(async () => ({
+      phase: 'stopped' as const,
+      endpoint: 'http://127.0.0.1:39081',
+      managed: false,
+      message: '本地服务已停止',
+    }))
+    render(<SettingsPanel localService={{ status, start, stop }} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    await act(async () => { await Promise.resolve() })
+
+    expect(status).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(screen.getByRole('status').textContent).toContain('本地服务未启动')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '检查状态' }))
+      await Promise.resolve()
+    })
+    expect(status).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '启动服务' }))
+      await Promise.resolve()
+    })
+    expect(start).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(screen.getByRole('status').textContent).toContain('本地 SenseVoice 服务运行中')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '停止服务' }))
+      await Promise.resolve()
+    })
+    expect(stop).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(screen.getByRole('status').textContent).toContain('本地服务已停止')
+  })
+
   it('shows mixed-language optimization for every Chinese language and preserves it while inactive', () => {
     render(<SettingsPanel />)
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))

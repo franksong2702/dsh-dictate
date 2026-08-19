@@ -8,6 +8,8 @@ import { extractContextTermsForRequest } from './term-extraction.ts'
 import { parsePolishRequest, polishTranscript } from './polish.ts'
 import { DICTATE_SETTINGS_NAMESPACE } from './settings-contract.ts'
 import { parseContextTermsRequest } from './terms.ts'
+import { LocalServiceController } from './local-service.ts'
+import { parseLocalServiceStartRequest } from './local-service-contract.ts'
 
 /** Cordis plugin name used by the profile bundle patch. */
 export const name = 'dsh-dictate'
@@ -30,8 +32,20 @@ export function apply(ctx: Context, config: Config = {}): void {
     readonly llm: LlmRuntime
     readonly sessions: SessionStore
   }
+  const localService = new LocalServiceController()
+  ctx.effect(() => () => localService.dispose(), 'dictate: stop managed local ASR on plugin disposal')
   ctx.effect(() => host.connection.rpc.handle('/dictate', async (endpoint, payload, signal) => {
     try {
+      if (endpoint === 'local-service-status') {
+        return { ok: true, value: await localService.status() }
+      }
+      if (endpoint === 'local-service-start') {
+        const request = parseLocalServiceStartRequest(payload)
+        return { ok: true, value: await localService.start(request.origin) }
+      }
+      if (endpoint === 'local-service-stop') {
+        return { ok: true, value: await localService.stop() }
+      }
       if (endpoint === 'terms') {
         const request = parseContextTermsRequest(payload)
         return { ok: true, value: {

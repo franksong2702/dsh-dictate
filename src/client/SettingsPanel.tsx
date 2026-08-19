@@ -1,6 +1,7 @@
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { LANGUAGE_OPTIONS, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
+import type { LocalServiceStatus } from '../local-service-contract.ts'
 
 /** One model exposed by the host for optional transcript polishing. */
 export interface ModelOption {
@@ -11,12 +12,57 @@ export interface ModelOption {
 /** Read-only host inputs for the Contextual Dictation settings card. */
 export interface SettingsPanelProps {
   readonly modelOptions?: readonly ModelOption[]
+  readonly localService?: {
+    readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly stop: (signal: AbortSignal) => Promise<LocalServiceStatus>
+  }
 }
 
 /** Render the browser-local Contextual Dictation card inside Plugin configuration. */
-export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): ReactNode {
+export function SettingsPanel({ modelOptions = [], localService }: SettingsPanelProps = {}): ReactNode {
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
   const [open, setOpen] = useState(false)
+  const [serviceStatus, setServiceStatus] = useState<LocalServiceStatus>()
+  const [serviceBusy, setServiceBusy] = useState(false)
+  const [serviceError, setServiceError] = useState('')
+
+  useEffect(() => {
+    if (prefs.transcriptionProvider !== 'local-endpoint' || localService === undefined) return
+    const controller = new AbortController()
+    const refresh = (): void => {
+      void localService.status(controller.signal).then((status) => {
+        if (!controller.signal.aborted) {
+          setServiceStatus(status)
+          setServiceError('')
+        }
+      }, (error: unknown) => {
+        if (!controller.signal.aborted) {
+          setServiceError(error instanceof Error ? error.message : '无法检查本地服务状态')
+        }
+      })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 3000)
+    return () => {
+      controller.abort()
+      window.clearInterval(timer)
+    }
+  }, [localService, prefs.transcriptionProvider])
+
+  const runServiceAction = (
+    action: (signal: AbortSignal) => Promise<LocalServiceStatus>,
+  ): void => {
+    const controller = new AbortController()
+    setServiceBusy(true)
+    setServiceError('')
+    void action(controller.signal).then((status) => {
+      setServiceStatus(status)
+      if (status.phase === 'running') updatePrefs({ localEndpoint: status.endpoint })
+    }, (error: unknown) => {
+      setServiceError(error instanceof Error ? error.message : '本地服务操作失败')
+    }).finally(() => { setServiceBusy(false) })
+  }
 
   return (
     <li
@@ -135,8 +181,56 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
                 />
               </label>
               <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-                录音结束后发送到本机 SenseVoice 服务；不会在浏览器中下载模型。服务需单独启动，并允许当前 DSH 地址跨域访问。
+                录音结束后发送到本机 SenseVoice 服务；不会在浏览器中下载模型。可在下方启动和检查服务，或连接外部启动的兼容端点。首次启动加载模型可能需要约 2 分钟。
               </p>
+              {localService === undefined ? (
+                <p role="status" style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
+                  当前 DSH host 未提供服务管理；请手动启动本地端点。
+                </p>
+              ) : (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: 10,
+                    border: '1px solid var(--dsw-alias-border-l2)',
+                    borderRadius: 8,
+                  }}
+                >
+                  <span role={serviceError === '' ? 'status' : 'alert'} style={{ flex: '1 1 240px', fontSize: 12 }}>
+                    {serviceError !== ''
+                      ? `服务状态：${serviceError}`
+                      : `服务状态：${serviceStatus?.message ?? '正在检查'}`}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={serviceBusy}
+                    onClick={() => { runServiceAction(localService.status) }}
+                  >
+                    检查状态
+                  </button>
+                  {serviceStatus?.phase === 'running' ? (
+                    <button
+                      type="button"
+                      disabled={serviceBusy || !serviceStatus.managed}
+                      title={serviceStatus.managed ? '停止插件启动的本地服务' : '外部服务不能由插件停止'}
+                      onClick={() => { runServiceAction(localService.stop) }}
+                    >
+                      停止服务
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={serviceBusy || serviceStatus?.phase === 'starting'}
+                      onClick={() => { runServiceAction(localService.start) }}
+                    >
+                      {serviceStatus?.phase === 'starting' ? '正在启动' : '启动服务'}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ) : null}
           <label

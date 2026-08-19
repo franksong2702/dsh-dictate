@@ -68,7 +68,16 @@
 
 ### 启动本地 SenseVoice 端点
 
-安装支持 `funasr-server` 的 FunASR 环境后，先启动服务。`--cors-origin` 必须与浏览器地址栏中的 DSH origin 完全一致；下面以 `http://127.0.0.1:3000` 为例：
+安装支持 `funasr-server` 的 FunASR 环境后，可以从插件设置页启动、停止并检查服务状态。DSH host 必须能在 `PATH` 中找到 `funasr-server`，也可以用服务端环境变量明确指定路径和工作目录：
+
+```sh
+export DSH_DICTATE_FUNASR_SERVER=/absolute/path/to/funasr-server
+export DSH_DICTATE_FUNASR_WORKDIR=/absolute/path/to/model-workspace
+```
+
+插件启动的进程固定绑定 `127.0.0.1:39081`，固定使用 CPU 和 SenseVoice，并只允许当前回环 DSH origin 跨域访问。浏览器不能向 RPC 传递命令、可执行路径或额外进程参数。
+
+也可以在插件外部手动启动服务。`--cors-origin` 必须与浏览器地址栏中的 DSH origin 完全一致；下面以测试环境 `http://127.0.0.1:3081` 为例：
 
 ```sh
 funasr-server \
@@ -76,10 +85,10 @@ funasr-server \
   --port 39081 \
   --device cpu \
   --model sensevoice \
-  --cors-origin http://127.0.0.1:3000
+  --cors-origin http://127.0.0.1:3081
 ```
 
-然后在“设置 → 插件 → 插件配置 → 上下文语音输入”中选择“本地服务端点（实验性）”，服务地址保留默认的 `http://127.0.0.1:39081`。服务未启动、CORS origin 不匹配或返回异常时，Composer 上方会显示可读错误；Web Speech 默认选项不受影响。
+然后在“设置 → 插件 → 插件配置 → 上下文语音输入”中选择“本地服务端点（实验性）”，服务地址保留默认的 `http://127.0.0.1:39081`。设置页会区分插件管理的进程与外部服务；外部服务可以检查但不能由插件停止。服务未启动、CORS origin 不匹配或返回异常时，界面会显示可读错误；Web Speech 默认选项不受影响。
 
 ## 兼容性与 Alpha 限制
 

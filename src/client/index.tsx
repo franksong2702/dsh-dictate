@@ -22,6 +22,10 @@ import {
   type ContextTermsRequest,
 } from '../terms.ts'
 import { DICTATE_SETTINGS_NAMESPACE } from '../settings-contract.ts'
+import {
+  parseLocalServiceStatus,
+  type LocalServiceStatus,
+} from '../local-service-contract.ts'
 
 interface InputActions {
   setDraft(text: string): void
@@ -111,8 +115,13 @@ function providerErrorMessage(error: unknown): string {
   return '无法启动语音输入'
 }
 
-function VoiceInputSettings({ loadModels }: {
+function VoiceInputSettings({ loadModels, localService }: {
   readonly loadModels: () => Promise<readonly ModelOption[]>
+  readonly localService: {
+    readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly stop: (signal: AbortSignal) => Promise<LocalServiceStatus>
+  }
 }): ReactNode {
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([])
   useEffect(() => {
@@ -129,7 +138,7 @@ function VoiceInputSettings({ loadModels }: {
     })
     return () => { active = false }
   }, [loadModels])
-  return <SettingsPanel modelOptions={modelOptions} />
+  return <SettingsPanel modelOptions={modelOptions} localService={localService} />
 }
 
 /** Register one manual dictation button immediately before the send action. */
@@ -166,6 +175,20 @@ export function apply(ctx: ClientContext): void {
     }
     return parseContextTerms((value as { readonly terms?: unknown }).terms)
   }
+  const callLocalService = async (
+    endpoint: 'local-service-status' | 'local-service-start' | 'local-service-stop',
+    signal: AbortSignal,
+  ): Promise<LocalServiceStatus> => {
+    const payload = endpoint === 'local-service-start' ? { origin: window.location.origin } : {}
+    const result = await connection.rpc.call('/dictate', endpoint, payload, signal)
+    if (!result.ok) throw new Error(result.error.message)
+    return parseLocalServiceStatus(result.value)
+  }
+  const localService = {
+    status: (signal: AbortSignal) => callLocalService('local-service-status', signal),
+    start: (signal: AbortSignal) => callLocalService('local-service-start', signal),
+    stop: (signal: AbortSignal) => callLocalService('local-service-stop', signal),
+  }
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',
     id: 'dictate-recorder',
@@ -183,7 +206,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     key: DICTATE_SETTINGS_NAMESPACE,
-  }, () => <VoiceInputSettings loadModels={loadModels} />))
+  }, () => <VoiceInputSettings loadModels={loadModels} localService={localService} />))
 }
 
 /** Manual click-to-start, click-to-stop dictation control. */
