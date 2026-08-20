@@ -311,6 +311,7 @@ export function VoiceInputButton({
       finalText: '',
       interimText: '',
       status: text,
+      hint: '',
     })
     messageTimerRef.current = window.setTimeout(() => {
       resetTranscription(sessionId)
@@ -415,6 +416,7 @@ export function VoiceInputButton({
       finalText: transcript,
       interimText: '',
       status: '模型润色中',
+      hint: '',
     })
     const controller = new AbortController()
     polishAbortRef.current?.abort()
@@ -457,6 +459,7 @@ export function VoiceInputButton({
       updateTranscription(sessionId, {
         phase: 'finalizing',
         status: localMode ? '正在整理录音' : '正在确认文字',
+        hint: localMode ? '请稍候，正在准备音频…' : '请稍候，正在确认识别结果…',
       })
       void activeSession.stop()
       return
@@ -512,6 +515,7 @@ export function VoiceInputButton({
         finalText: '',
         interimText: '',
         status: '正在准备本地录音',
+        hint: '正在连接麦克风…',
       })
     }
 
@@ -528,6 +532,7 @@ export function VoiceInputButton({
           finalText: '',
           interimText: '',
           status: localMode ? '正在录音' : '正在听写',
+          hint: localMode ? '再次点击麦克风结束并转写' : '请开始说话…',
         })
       },
       onInterim: (text) => {
@@ -556,6 +561,7 @@ export function VoiceInputButton({
         updateTranscription(sessionId, {
           phase: 'finalizing',
           status: localMode ? '正在整理录音' : '正在确认文字',
+          hint: localMode ? '请稍候，正在准备音频…' : '请稍候，正在确认识别结果…',
         })
       },
       onProgress: (progress) => {
@@ -563,6 +569,11 @@ export function VoiceInputButton({
         updateTranscription(sessionId, {
           phase: progress.phase === 'microphone' ? 'preparing' : 'finalizing',
           status: progress.message,
+          hint: progress.phase === 'microphone'
+            ? '正在连接麦克风…'
+            : progress.phase === 'audio'
+              ? '请稍候，正在准备音频…'
+              : '请稍候，正在识别语音…',
         })
       },
       onError: (error) => {

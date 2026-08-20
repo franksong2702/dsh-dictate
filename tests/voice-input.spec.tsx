@@ -439,6 +439,8 @@ describe('Contextual Dictation browser plugin', () => {
     expect(FakeRecognition.instances).toHaveLength(0)
     expect(button.getAttribute('title')).toBe('点击结束并转写')
     expect(screen.getByRole('status').textContent).toContain('正在录音')
+    expect(screen.getByRole('status').textContent).toContain('再次点击麦克风结束并转写')
+    expect(screen.getByRole('status').textContent).not.toContain('请开始说话')
     expect(setDraft).not.toHaveBeenCalled()
 
     await act(async () => { fireEvent.click(button); await Promise.resolve() })

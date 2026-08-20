@@ -79,6 +79,21 @@ describe('TranscriptionDock', () => {
     expect(interim.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
   })
 
+  it.each([
+    ['preparing', '正在准备本地录音', '正在连接麦克风…'],
+    ['listening', '正在录音', '再次点击麦克风结束并转写'],
+    ['listening', '正在听写', '请开始说话…'],
+    ['finalizing', '正在整理录音', '请稍候，正在准备音频…'],
+    ['finalizing', '正在由本地服务转写', '请稍候，正在识别语音…'],
+    ['finalizing', '正在确认文字', '请稍候，正在确认识别结果…'],
+  ] as const)('shows the phase-aware empty preview for %s / %s', (phase, status, hint) => {
+    updateTranscription('dock-render', { phase, status, hint, finalText: '', interimText: '' })
+
+    render(<TranscriptionDock sessionId="dock-render" />)
+    const preview = screen.getByText(hint)
+    expect(preview.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
+  })
+
   it('uses the host Composer width and centers on the same horizontal axis', () => {
     updateTranscription('dock-render', { phase: 'listening' })
 

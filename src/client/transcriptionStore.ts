@@ -14,6 +14,7 @@ export interface TranscriptionSnapshot {
   readonly finalText: string
   readonly interimText: string
   readonly status: string
+  readonly hint: string
 }
 
 /** Stable empty state shared by sessions that have not started transcribing. */
@@ -22,6 +23,7 @@ export const EMPTY_TRANSCRIPTION: TranscriptionSnapshot = Object.freeze({
   finalText: '',
   interimText: '',
   status: '',
+  hint: '',
 })
 
 interface TranscriptionEntry {
@@ -86,9 +88,11 @@ export function updateTranscription(
     finalText: patch.finalText ?? previous.finalText,
     interimText: patch.interimText ?? previous.interimText,
     status: patch.status ?? previous.status,
+    hint: patch.hint ?? previous.hint,
   }
   if (next.phase === previous.phase && next.finalText === previous.finalText
-    && next.interimText === previous.interimText && next.status === previous.status) {
+    && next.interimText === previous.interimText && next.status === previous.status
+    && next.hint === previous.hint) {
     return previous
   }
   entry.snapshot = next

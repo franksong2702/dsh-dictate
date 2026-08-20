@@ -31,9 +31,8 @@ function phaseTitle(snapshot: TranscriptionSnapshot): string {
 function textPreview(snapshot: TranscriptionSnapshot): ReactNode {
   if (snapshot.phase === 'preparing' || snapshot.phase === 'listening' || snapshot.phase === 'finalizing') {
     if (snapshot.finalText === '' && snapshot.interimText === '') {
-      return snapshot.phase === 'preparing'
-        ? null
-        : <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>请开始说话…</span>
+      if (snapshot.hint === '') return null
+      return <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>{snapshot.hint}</span>
     }
     return (
       <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>
