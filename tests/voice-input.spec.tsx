@@ -848,7 +848,7 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.getByRole('status').textContent).toContain('语音已转入输入框，请检查后发送')
   })
 
-  it('shows only 模型润色中 while a selected model is polishing', async () => {
+  it('shows a provisional transcript and Composer destination while polishing', async () => {
     const selectedModel = encodeModelReference({ provider: 'deepseek', model: 'chat' })
     updatePrefs({ modelPolishEnabled: true, selectedModel })
     const setDraft = vi.fn()
@@ -868,6 +868,10 @@ describe('Contextual Dictation browser plugin', () => {
     act(() => { recognition?.finishWith('深度求索哈尼斯') })
 
     expect(screen.getByRole('status').textContent).toContain('模型润色中')
+    expect(screen.getByRole('status').textContent).toContain('初步识别（非最终）：')
+    expect(screen.getByRole('status').textContent).toContain('深度求索哈尼斯')
+    expect(screen.getByRole('status').textContent).toContain('润色后将写入输入框')
+    expect(document.querySelector('[data-transcription-provisional]')).not.toBeNull()
     expect(polish).toHaveBeenCalledWith({
       sessionId: 'session-1',
       provider: 'deepseek',
@@ -879,7 +883,7 @@ describe('Contextual Dictation browser plugin', () => {
     await act(async () => { resolvePolish?.('DeepSeek Harness') })
     expect(setDraft).toHaveBeenCalledWith('前文 DeepSeek Harness')
     expect(submit).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toContain('语音已转入输入框，请检查后发送')
+    expect(screen.getByRole('status').textContent).toContain('润色完成，已写入输入框')
   })
 
   it('starts polishing immediately when background terms are still pending', () => {
@@ -944,7 +948,8 @@ describe('Contextual Dictation browser plugin', () => {
     })
     const setDraft = vi.fn()
     const submit = vi.fn()
-    const polish = vi.fn(() => Promise.resolve('润色结果'))
+    let resolvePolish: ((text: string) => void) | undefined
+    const polish = vi.fn(() => new Promise<string>((resolve) => { resolvePolish = resolve }))
     render(voiceSurfaces({
       inputActions: { setDraft, submit },
       input: { draft: '' },
@@ -957,11 +962,16 @@ describe('Contextual Dictation browser plugin', () => {
     const recognition = FakeRecognition.instances[0]
     act(() => { recognition?.onstart?.() })
     fireEvent.click(button)
-    await act(async () => { recognition?.finishWith('原始转写') })
+    act(() => { recognition?.finishWith('原始转写') })
+
+    expect(screen.getByRole('status').textContent).toContain('初步识别（非最终）：')
+    expect(screen.getByRole('status').textContent).toContain('原始转写')
+    expect(screen.getByRole('status').textContent).toContain('润色后将直接发送')
+    await act(async () => { resolvePolish?.('润色结果') })
 
     expect(setDraft).toHaveBeenCalledWith('润色结果')
     expect(submit).toHaveBeenCalledOnce()
-    expect(screen.getByRole('status').textContent).toContain('润色结果已交给 DSH 发送')
+    expect(screen.getByRole('status').textContent).toContain('润色完成，已直接发送')
     expect(document.querySelector('[data-transcription-final]')).toBeNull()
   })
 
@@ -988,7 +998,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(setDraft).toHaveBeenCalledWith('润色结果')
     expect(submit).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toContain('语音已转入输入框，请检查后发送')
+    expect(screen.getByRole('status').textContent).toContain('润色完成，已写入输入框')
   })
 
   it('automatically sends the original transcript when model polishing fails', async () => {

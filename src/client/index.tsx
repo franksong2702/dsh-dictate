@@ -416,7 +416,7 @@ export function VoiceInputButton({
       finalText: transcript,
       interimText: '',
       status: '模型润色中',
-      hint: '',
+      hint: allowAutomaticSend ? '润色后将直接发送' : '润色后将写入输入框',
     })
     const controller = new AbortController()
     polishAbortRef.current?.abort()
@@ -432,8 +432,8 @@ export function VoiceInputButton({
       if (controller.signal.aborted) return
       insertTranscript(text, allowAutomaticSend)
       showTransientMessage(allowAutomaticSend
-        ? '润色结果已交给 DSH 发送'
-        : '语音已转入输入框，请检查后发送')
+        ? '润色完成，已直接发送'
+        : '润色完成，已写入输入框')
     } catch {
       if (controller.signal.aborted) return
       insertTranscript(transcript, allowAutomaticSend)

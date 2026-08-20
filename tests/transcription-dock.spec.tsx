@@ -108,8 +108,24 @@ describe('TranscriptionDock', () => {
     expect(dock.style.margin).toBe('0px auto 8px')
   })
 
+  it('marks the polishing transcript as provisional and explains its destination', () => {
+    updateTranscription('dock-render', {
+      phase: 'polishing',
+      status: '模型润色中',
+      finalText: '初步转写',
+      hint: '润色后将写入输入框',
+    })
+
+    render(<TranscriptionDock sessionId="dock-render" />)
+    const label = screen.getByText('初步识别（非最终）：')
+    const destination = screen.getByText('· 润色后将写入输入框')
+    expect(label.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
+    expect(destination.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
+    expect(document.querySelector('[data-transcription-provisional]')?.textContent).toBe('初步转写')
+    expect(document.querySelector('[data-transcription-final]')).toBeNull()
+  })
+
   it.each([
-    ['polishing', '模型润色中', 'status'],
     ['complete', '转写完成', 'status'],
     ['error', '转写失败', 'alert'],
   ] as const)('renders %s with its exact title, preview, and ARIA role', (phase, title, role) => {

@@ -29,6 +29,19 @@ function phaseTitle(snapshot: TranscriptionSnapshot): string {
 }
 
 function textPreview(snapshot: TranscriptionSnapshot): ReactNode {
+  if (snapshot.phase === 'polishing') {
+    return (
+      <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>
+        <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>初步识别（非最终）：</span>
+        {snapshot.finalText !== '' ? (
+          <span data-transcription-provisional>{snapshot.finalText}</span>
+        ) : null}
+        {snapshot.hint !== '' ? (
+          <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>· {snapshot.hint}</span>
+        ) : null}
+      </span>
+    )
+  }
   if (snapshot.phase === 'preparing' || snapshot.phase === 'listening' || snapshot.phase === 'finalizing') {
     if (snapshot.finalText === '' && snapshot.interimText === '') {
       if (snapshot.hint === '') return null
