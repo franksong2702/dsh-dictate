@@ -17,7 +17,7 @@ export type AsrProviderStatus =
 
 /** Human-readable provider progress. */
 export interface AsrProviderProgress {
-  readonly phase: 'runtime' | 'microphone' | 'audio'
+  readonly phase: 'runtime' | 'microphone' | 'voice' | 'audio'
   readonly message?: string
   readonly loaded?: number
   readonly total?: number

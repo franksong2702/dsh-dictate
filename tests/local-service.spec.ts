@@ -4,7 +4,10 @@ import {
   type LocalServiceProcess,
   type LocalServiceRuntime,
 } from '../src/local-service.ts'
-import { parseLocalServiceStartRequest } from '../src/local-service-contract.ts'
+import {
+  parseLocalServiceStartRequest,
+  parseLocalServiceStatus,
+} from '../src/local-service-contract.ts'
 
 class FakeProcess implements LocalServiceProcess {
   readonly pid = 1234
@@ -45,6 +48,7 @@ function runtime(overrides: Partial<LocalServiceRuntime> = {}): LocalServiceRunt
     fetch: vi.fn(async () => new Response('', { status: 503 })),
     delay: vi.fn(async () => {}),
     executableAvailable: vi.fn(async () => true),
+    now: vi.fn(() => 10_000),
     ...overrides,
   }
 }
@@ -72,9 +76,12 @@ describe('local SenseVoice service controller', () => {
 
     await expect(controller.status()).resolves.toEqual({
       phase: 'stopped',
+      stage: 'idle',
       endpoint: 'http://127.0.0.1:39081',
       managed: false,
       message: '本地服务未启动',
+      progressPercent: null,
+      elapsedSeconds: null,
     })
     expect(testRuntime.spawn).not.toHaveBeenCalled()
   })
@@ -92,9 +99,12 @@ describe('local SenseVoice service controller', () => {
 
     await expect(controller.start('http://127.0.0.1:3081')).resolves.toEqual({
       phase: 'starting',
+      stage: 'starting-process',
       endpoint: 'http://127.0.0.1:39081',
       managed: true,
-      message: '正在加载 SenseVoice 模型',
+      message: '正在启动本地服务进程',
+      progressPercent: null,
+      elapsedSeconds: 0,
     })
     expect(testRuntime.spawn).toHaveBeenCalledWith('/test/funasr-server', [
       '--host', '127.0.0.1',
@@ -111,6 +121,55 @@ describe('local SenseVoice service controller', () => {
 
     await expect(controller.stop()).resolves.toMatchObject({ phase: 'stopped', managed: false })
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('reports only model-download percentages observed in server output', async () => {
+    const child = new FakeProcess()
+    const testRuntime = runtime({ spawn: vi.fn(() => child) })
+    const controller = new LocalServiceController(testRuntime)
+
+    await controller.start('http://127.0.0.1:3081')
+    child.emit('data', 'Downloading 20 files from model hub')
+    await expect(controller.status()).resolves.toMatchObject({
+      phase: 'starting',
+      stage: 'checking-model',
+      progressPercent: null,
+      message: '正在检查 SenseVoice 模型文件',
+    })
+
+    child.emit('data', '\u001b[1Amodel.pt: 42%|████▏     | 393M/936M')
+    await expect(controller.status()).resolves.toMatchObject({
+      phase: 'starting',
+      stage: 'downloading-model',
+      progressPercent: 42,
+      message: '正在下载 SenseVoice 模型（42%）',
+    })
+
+    child.emit('data', 'funasr version: 1.2.7')
+    await expect(controller.status()).resolves.toMatchObject({
+      phase: 'starting',
+      stage: 'loading-model',
+      progressPercent: null,
+    })
+
+    child.emit('data', 'Application startup complete')
+    await expect(controller.status()).resolves.toMatchObject({
+      phase: 'starting',
+      stage: 'checking-health',
+      progressPercent: null,
+    })
+  })
+
+  it('rejects invalid service progress from the host boundary', () => {
+    expect(() => parseLocalServiceStatus({
+      phase: 'starting',
+      stage: 'downloading-model',
+      endpoint: 'http://127.0.0.1:39081',
+      managed: true,
+      message: '下载中',
+      progressPercent: 101,
+      elapsedSeconds: 3,
+    })).toThrow('local service returned invalid status')
   })
 
   it('does not spawn when the host executable is unavailable', async () => {

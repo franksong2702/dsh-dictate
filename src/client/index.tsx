@@ -6,14 +6,18 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { SettingsPanel, type ModelOption } from './SettingsPanel.tsx'
 import { TranscriptionDock } from './TranscriptionDock.tsx'
 import { loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
-import { createLocalEndpointProvider } from './localEndpointProvider.ts'
+import {
+  checkLocalEndpoint as checkLocalEndpointHealth,
+  createLocalEndpointProvider,
+} from './localEndpointProvider.ts'
 import { createWebSpeechProvider } from './webSpeechProvider.ts'
-import type {
-  AsrContextTerm,
-  AsrProvider,
-  AsrProviderError,
-  AsrProviderSession,
-  AsrProviderStartOptions,
+import {
+  asrProviderError,
+  type AsrContextTerm,
+  type AsrProvider,
+  type AsrProviderError,
+  type AsrProviderSession,
+  type AsrProviderStartOptions,
 } from './asrProvider.ts'
 import { resetTranscription, updateTranscription } from './transcriptionStore.ts'
 import {
@@ -44,6 +48,7 @@ interface VoiceInputProps {
     request: ContextTermsRequest,
     signal: AbortSignal,
   ) => Promise<readonly ContextTerm[]>
+  readonly checkLocalEndpoint?: (endpoint: string, signal: AbortSignal) => Promise<string>
   /** Test seam and future host override for the two user-selectable routes. */
   readonly providers?: Partial<Record<'web-speech' | 'local-endpoint', AsrProvider>>
 }
@@ -115,8 +120,9 @@ function providerErrorMessage(error: unknown): string {
   return '无法启动语音输入'
 }
 
-function VoiceInputSettings({ loadModels, localService }: {
+function VoiceInputSettings({ loadModels, testEndpoint, localService }: {
   readonly loadModels: () => Promise<readonly ModelOption[]>
+  readonly testEndpoint: (endpoint: string, signal: AbortSignal) => Promise<string>
   readonly localService: {
     readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
     readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
@@ -138,7 +144,11 @@ function VoiceInputSettings({ loadModels, localService }: {
     })
     return () => { active = false }
   }, [loadModels])
-  return <SettingsPanel modelOptions={modelOptions} localService={localService} />
+  return <SettingsPanel
+    modelOptions={modelOptions}
+    testEndpoint={testEndpoint}
+    localService={localService}
+  />
 }
 
 /** Register one manual dictation button immediately before the send action. */
@@ -175,6 +185,8 @@ export function apply(ctx: ClientContext): void {
     }
     return parseContextTerms((value as { readonly terms?: unknown }).terms)
   }
+  const testEndpoint = (endpoint: string, signal: AbortSignal): Promise<string> =>
+    checkLocalEndpointHealth(endpoint, signal)
   const callLocalService = async (
     endpoint: 'local-service-status' | 'local-service-start' | 'local-service-stop',
     signal: AbortSignal,
@@ -197,6 +209,7 @@ export function apply(ctx: ClientContext): void {
     {...props as VoiceInputProps}
     polish={polish}
     loadContextTerms={loadContextTerms}
+    checkLocalEndpoint={testEndpoint}
   />))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock',
@@ -206,7 +219,11 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     key: DICTATE_SETTINGS_NAMESPACE,
-  }, () => <VoiceInputSettings loadModels={loadModels} localService={localService} />))
+  }, () => <VoiceInputSettings
+    loadModels={loadModels}
+    testEndpoint={testEndpoint}
+    localService={localService}
+  />))
 }
 
 /** Manual click-to-start, click-to-stop dictation control. */
@@ -216,6 +233,7 @@ export function VoiceInputButton({
   sessionId,
   polish,
   loadContextTerms,
+  checkLocalEndpoint,
   providers,
 }: VoiceInputProps) {
   const [recording, setRecording] = useState(false)
@@ -229,6 +247,7 @@ export function VoiceInputButton({
   const failedRef = useRef(false)
   const finalizingRef = useRef(false)
   const messageTimerRef = useRef<number>()
+  const permissionStatusTimerRef = useRef<number>()
   const polishAbortRef = useRef<AbortController>()
   const contextTermsRef = useRef<readonly ContextTerm[]>([])
   const contextTermsKeyRef = useRef<string>()
@@ -304,14 +323,22 @@ export function VoiceInputButton({
     messageTimerRef.current = undefined
   }
 
-  const showTransientMessage = (text: string, error = false): void => {
+  const clearPermissionStatusTimer = (): void => {
+    if (permissionStatusTimerRef.current === undefined) return
+    window.clearTimeout(permissionStatusTimerRef.current)
+    permissionStatusTimerRef.current = undefined
+  }
+
+  const showTransientMessage = (title: string, detail: string, error = false): void => {
     clearMessageTimer()
+    clearPermissionStatusTimer()
     updateTranscription(sessionId, {
       phase: error ? 'error' : 'complete',
       finalText: '',
       interimText: '',
-      status: text,
-      hint: '',
+      status: title,
+      hint: detail,
+      action: null,
     })
     messageTimerRef.current = window.setTimeout(() => {
       resetTranscription(sessionId)
@@ -321,6 +348,7 @@ export function VoiceInputButton({
 
   useEffect(() => () => {
     clearMessageTimer()
+    clearPermissionStatusTimer()
     clearTermsDebounce()
     startAbortRef.current?.abort()
     startAbortRef.current = undefined
@@ -400,14 +428,18 @@ export function VoiceInputButton({
     const selected = selectedModel
     if (!prefs.modelPolishEnabled || polish === undefined || selected === undefined) {
       insertTranscript(transcript, allowAutomaticSend)
-      showTransientMessage(allowAutomaticSend
-        ? prefs.modelPolishEnabled && selected === undefined
-          ? '未选择润色模型，原始转写已交给 DSH 发送'
-          : '转写结果已交给 DSH 发送'
-        : prefs.modelPolishEnabled && selected === undefined
-          ? '请选择润色模型'
-          : '语音已转入输入框，请检查后发送',
-      prefs.modelPolishEnabled && selected === undefined)
+      const polishUnavailable = prefs.modelPolishEnabled && selected === undefined
+      showTransientMessage(
+        polishUnavailable ? '润色未完成' : '已转写完成',
+        allowAutomaticSend
+          ? polishUnavailable
+            ? '未选择润色模型，原始转写已直接发送'
+            : '转写结果已直接发送'
+          : polishUnavailable
+            ? '请选择润色模型；原始转写已写入输入框'
+            : '转写结果已写入输入框，请检查后发送',
+        polishUnavailable,
+      )
       return
     }
     clearMessageTimer()
@@ -415,7 +447,7 @@ export function VoiceInputButton({
       phase: 'polishing',
       finalText: transcript,
       interimText: '',
-      status: '模型润色中',
+      status: '正在润色中',
       hint: allowAutomaticSend ? '润色后将直接发送' : '润色后将写入输入框',
     })
     const controller = new AbortController()
@@ -431,15 +463,18 @@ export function VoiceInputButton({
       }, controller.signal)
       if (controller.signal.aborted) return
       insertTranscript(text, allowAutomaticSend)
-      showTransientMessage(allowAutomaticSend
-        ? '润色完成，已直接发送'
-        : '润色完成，已写入输入框')
+      showTransientMessage(
+        '已润色完成',
+        allowAutomaticSend ? '最终结果已直接发送' : '最终结果已写入输入框',
+      )
     } catch {
       if (controller.signal.aborted) return
       insertTranscript(transcript, allowAutomaticSend)
-      showTransientMessage(allowAutomaticSend
-        ? '模型润色失败，原始转写已交给 DSH 发送'
-        : '模型润色失败，已保留原始转写', true)
+      showTransientMessage(
+        '润色未完成',
+        allowAutomaticSend ? '原始转写已直接发送' : '原始转写已写入输入框',
+        true,
+      )
     } finally {
       if (polishAbortRef.current === controller) polishAbortRef.current = undefined
     }
@@ -458,20 +493,30 @@ export function VoiceInputButton({
       setPreparing(localMode)
       updateTranscription(sessionId, {
         phase: 'finalizing',
-        status: localMode ? '正在整理录音' : '正在确认文字',
-        hint: localMode ? '请稍候，正在准备音频…' : '请稍候，正在确认识别结果…',
+        status: localMode ? '正在转写中' : '正在确认中',
+        hint: localMode ? '正在保留结尾语音，避免截断最后一句…' : '正在确认识别结果，请稍候…',
+        action: null,
       })
       void activeSession.stop()
       return
     }
     if (startAbortRef.current !== undefined) {
+      clearPermissionStatusTimer()
       startAbortRef.current.abort()
+      startAbortRef.current = undefined
+      activeProviderRef.current = undefined
+      setPreparing(false)
+      resetTranscription(sessionId)
       return
     }
     if (!supported) {
-      showTransientMessage(prefs.transcriptionProvider === 'web-speech'
-        ? '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'
-        : '当前浏览器不支持本地录音，请使用最新版 Chrome 或 Edge', true)
+      showTransientMessage(
+        '转写未完成',
+        prefs.transcriptionProvider === 'web-speech'
+          ? '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'
+          : '当前浏览器不支持本地录音，请使用最新版 Chrome 或 Edge',
+        true,
+      )
       return
     }
 
@@ -493,9 +538,9 @@ export function VoiceInputButton({
     }
     if (cachedTerms === undefined) contextTermsRef.current = []
 
-    const providerId = prefs.transcriptionProvider
-    const localMode = providerId === 'local-endpoint'
-    const provider = injectedProvider ?? (providerId === 'web-speech'
+    let providerId = prefs.transcriptionProvider
+    let localMode = providerId === 'local-endpoint'
+    let provider = injectedProvider ?? (providerId === 'web-speech'
       ? WEB_SPEECH_PROVIDER
       : createLocalEndpointProvider({ endpoint: prefs.localEndpoint }))
     const controller = new AbortController()
@@ -503,6 +548,7 @@ export function VoiceInputButton({
     finalizingRef.current = false
     failedRef.current = false
     let ended = false
+    let fallbackNotice = false
     const finalSegments: string[] = []
     const currentFinalText = (): string => joinRecognitionSegments(finalSegments, prefs.lang)
 
@@ -510,13 +556,24 @@ export function VoiceInputButton({
     if (localMode) {
       setPreparing(true)
       clearMessageTimer()
-      updateTranscription(sessionId, {
-        phase: 'preparing',
-        finalText: '',
-        interimText: '',
-        status: '正在准备本地录音',
-        hint: '正在连接麦克风…',
-      })
+      clearPermissionStatusTimer()
+      resetTranscription(sessionId)
+    }
+
+    const prepareForLocalMicrophone = (): void => {
+      if (!localMode) return
+      permissionStatusTimerRef.current = window.setTimeout(() => {
+        permissionStatusTimerRef.current = undefined
+        if (startAbortRef.current !== controller) return
+        updateTranscription(sessionId, {
+          phase: 'preparing',
+          finalText: '',
+          interimText: '',
+          status: '等待授权中',
+          hint: '请按浏览器提示允许麦克风访问…',
+          action: null,
+        })
+      }, 2000)
     }
 
     const startOptions: AsrProviderStartOptions = {
@@ -525,14 +582,20 @@ export function VoiceInputButton({
       signal: controller.signal,
       onStart: () => {
         clearMessageTimer()
+        clearPermissionStatusTimer()
         setPreparing(false)
         setRecording(true)
         updateTranscription(sessionId, {
           phase: 'listening',
           finalText: '',
           interimText: '',
-          status: localMode ? '正在录音' : '正在听写',
-          hint: localMode ? '再次点击麦克风结束并转写' : '请开始说话…',
+          status: localMode ? '正在录音中' : '正在听写中',
+          hint: localMode
+            ? '再次点击麦克风结束并转写'
+            : fallbackNotice
+              ? '本地服务不可用，已按设置改用 Web Speech；请开始说话…'
+              : '请开始说话…',
+          action: null,
         })
       },
       onInterim: (text) => {
@@ -540,7 +603,7 @@ export function VoiceInputButton({
           phase: finalizingRef.current ? 'finalizing' : 'listening',
           finalText: currentFinalText(),
           interimText: text,
-          status: finalizingRef.current ? '正在确认文字' : '正在听写',
+          status: finalizingRef.current ? '正在确认中' : '正在听写中',
         })
       },
       onFinal: (text) => {
@@ -550,8 +613,8 @@ export function VoiceInputButton({
           finalText: currentFinalText(),
           interimText: '',
           status: finalizingRef.current
-            ? localMode ? '正在由本地服务转写' : '正在确认文字'
-            : localMode ? '正在录音' : '正在听写',
+            ? localMode ? '正在转写中' : '正在确认中'
+            : localMode ? '正在录音中' : '正在听写中',
         })
       },
       onStatus: (status) => {
@@ -560,27 +623,43 @@ export function VoiceInputButton({
         setPreparing(localMode)
         updateTranscription(sessionId, {
           phase: 'finalizing',
-          status: localMode ? '正在整理录音' : '正在确认文字',
-          hint: localMode ? '请稍候，正在准备音频…' : '请稍候，正在确认识别结果…',
+          status: localMode ? '正在转写中' : '正在确认中',
+          hint: localMode ? '正在保留结尾语音，避免截断最后一句…' : '正在确认识别结果，请稍候…',
+          action: null,
         })
       },
       onProgress: (progress) => {
         if (progress.message === undefined) return
+        if (progress.phase === 'microphone') return
+        if (progress.phase === 'voice') {
+          if (!localMode || finalizingRef.current) return
+          updateTranscription(sessionId, {
+            phase: 'listening',
+            status: '正在录音中',
+            hint: '已检测到语音；再次点击麦克风结束并转写',
+            action: null,
+          })
+          return
+        }
+        clearPermissionStatusTimer()
         updateTranscription(sessionId, {
-          phase: progress.phase === 'microphone' ? 'preparing' : 'finalizing',
-          status: progress.message,
-          hint: progress.phase === 'microphone'
-            ? '正在连接麦克风…'
-            : progress.phase === 'audio'
-              ? '请稍候，正在准备音频…'
-              : '请稍候，正在识别语音…',
+          phase: 'finalizing',
+          status: '正在转写中',
+          hint: progress.phase === 'audio'
+            ? progress.message.includes('保留')
+              ? '正在保留结尾语音，避免截断最后一句…'
+              : '录音已结束，正在准备音频…'
+            : '本地服务正在识别语音，请稍候…',
+          action: null,
         })
       },
       onError: (error) => {
+        clearPermissionStatusTimer()
         failedRef.current = true
-        showTransientMessage(error.message, true)
+        showTransientMessage('转写未完成', error.message, true)
       },
       onEnd: (reason) => {
+        clearPermissionStatusTimer()
         ended = true
         sessionRef.current = undefined
         activeProviderRef.current = undefined
@@ -593,7 +672,7 @@ export function VoiceInputButton({
         if (transcript !== '') {
           void finishTranscript(transcript, allowAutomaticSend)
         } else if (!failedRef.current && reason !== 'abort') {
-          showTransientMessage('没有识别到语音')
+          showTransientMessage('转写未完成', '没有识别到语音，请重试')
         } else if (reason === 'abort' && !failedRef.current) {
           resetTranscription(sessionId)
         }
@@ -606,7 +685,6 @@ export function VoiceInputButton({
       }
       sessionRef.current = session
       startAbortRef.current = undefined
-      activeProviderRef.current = undefined
       if (shouldLoadContextTerms) {
         void requestContextTermsRef.current(termsRequestAtStart, termsKeyAtStart).then((terms) => {
           if (sessionRef.current === session) void session.updateTerms(terms)
@@ -616,25 +694,91 @@ export function VoiceInputButton({
       }
     }
     const rejectSession = (error: unknown): void => {
+      clearPermissionStatusTimer()
       startAbortRef.current = undefined
+      activeProviderRef.current = undefined
       setRecording(false)
       setPreparing(false)
       if (controller.signal.aborted) {
         resetTranscription(sessionId)
         return
       }
-      if (!failedRef.current) showTransientMessage(providerErrorMessage(error), true)
+      if (!failedRef.current) showTransientMessage('转写未完成', providerErrorMessage(error), true)
     }
-    try {
-      const started = provider.start(startOptions)
-      const pending = started as Partial<Promise<AsrProviderSession>>
-      if (typeof pending.then === 'function') {
-        void (started as Promise<AsrProviderSession>).then(acceptSession, rejectSession)
-      } else {
-        acceptSession(started as AsrProviderSession)
+
+    const beginProvider = (): void => {
+      try {
+        const started = provider.start(startOptions)
+        const pending = started as Partial<Promise<AsrProviderSession>>
+        if (typeof pending.then === 'function') {
+          void (started as Promise<AsrProviderSession>).then(acceptSession, rejectSession)
+        } else {
+          acceptSession(started as AsrProviderSession)
+        }
+      } catch (error) {
+        rejectSession(error)
       }
-    } catch (error) {
+    }
+
+    const webSpeechAvailable = providers?.['web-speech'] !== undefined
+      || (typeof window !== 'undefined'
+        && (window.SpeechRecognition !== undefined || window.webkitSpeechRecognition !== undefined))
+    const fallbackToWebSpeech = (): void => {
+      if (controller.signal.aborted || startAbortRef.current !== controller) return
+      if (!webSpeechAvailable) {
+        rejectSession(asrProviderError(
+          'unsupported',
+          '本地服务不可用，且当前浏览器不支持 Web Speech 回退',
+        ))
+        return
+      }
+      clearMessageTimer()
+      clearPermissionStatusTimer()
+      resetTranscription(sessionId)
+      setPreparing(false)
+      providerId = 'web-speech'
+      localMode = false
+      fallbackNotice = true
+      provider = providers?.['web-speech'] ?? WEB_SPEECH_PROVIDER
+      activeProviderRef.current = providerId
+      beginProvider()
+    }
+    const handlePreflightFailure = (error: unknown): void => {
+      if (controller.signal.aborted) {
+        rejectSession(error)
+        return
+      }
+      clearPermissionStatusTimer()
+      setPreparing(false)
+      const detail = providerErrorMessage(error)
+      if (prefs.localFallbackPolicy === 'web-speech') {
+        fallbackToWebSpeech()
+        return
+      }
+      if (prefs.localFallbackPolicy === 'ask' && webSpeechAvailable) {
+        clearMessageTimer()
+        updateTranscription(sessionId, {
+          phase: 'error',
+          finalText: '',
+          interimText: '',
+          status: '转写未完成',
+          hint: `${detail}。是否改用 Web Speech？`,
+          action: { label: '改用 Web Speech', run: fallbackToWebSpeech },
+        })
+        return
+      }
       rejectSession(error)
+    }
+
+    if (localMode && checkLocalEndpoint !== undefined) {
+      void checkLocalEndpoint(prefs.localEndpoint, controller.signal).then(() => {
+        if (controller.signal.aborted || startAbortRef.current !== controller) return
+        prepareForLocalMicrophone()
+        beginProvider()
+      }, handlePreflightFailure)
+    } else {
+      prepareForLocalMicrophone()
+      beginProvider()
     }
   }
   toggleRef.current = toggle

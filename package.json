@@ -1,7 +1,19 @@
 {
   "name": "dsh-dictate",
   "version": "0.4.0-alpha.3",
-  "description": "读取当前 Session 上下文的语音输入，让识别更准、转写更干净，发送权始终在你手上",
+  "description": "Context-aware voice input for DeepSeek Harness with Web Speech, local SenseVoice transcription, model polish, editable Composer drafts, and user-controlled sending",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "voice-input",
+    "speech-to-text",
+    "dictation",
+    "sensevoice",
+    "web-speech",
+    "asr",
+    "composer"
+  ],
   "author": "Frank Song",
   "repository": {
     "type": "git",
@@ -12,6 +24,9 @@
     "url": "https://github.com/franksong2702/dsh-dictate/issues"
   },
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
@@ -48,6 +63,9 @@
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
+    "docs/images/voice-input-hero.jpg",
+    "docs/images/composer-voice-entry.jpg",
+    "docs/images/voice-input-settings.jpg",
     "LICENSE"
   ],
   "scripts": {

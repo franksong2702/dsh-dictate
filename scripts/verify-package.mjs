@@ -8,6 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 const work = await mkdtemp(join(tmpdir(), 'dsh-dictate-package-'))
 const packedNodeModules = join(work, 'unpack', 'package', 'node_modules')
+const requiredKeywords = ['deepseek-harness', 'voice-input', 'speech-to-text', 'sensevoice']
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, { cwd, encoding: 'utf8' })
@@ -18,6 +19,17 @@ function run(command, args, cwd = root) {
 }
 
 try {
+  if (typeof manifest.description !== 'string'
+    || !/DeepSeek Harness/i.test(manifest.description)
+    || !/voice input/i.test(manifest.description)) {
+    throw new Error('package description must expose DeepSeek Harness voice-input search terms')
+  }
+  for (const keyword of requiredKeywords) {
+    if (!Array.isArray(manifest.keywords) || !manifest.keywords.includes(keyword)) {
+      throw new Error(`package keywords are missing ${keyword}`)
+    }
+  }
+
   run('pnpm', ['--config.ignore-scripts=true', 'pack', '--pack-destination', work])
   const tarball = join(work, `${manifest.name}-${manifest.version}.tgz`)
   await access(tarball)
@@ -29,6 +41,9 @@ try {
     'package/lib/index.js',
     'package/lib/client.js',
     'package/lib/types/index.d.ts',
+    'package/docs/images/voice-input-hero.jpg',
+    'package/docs/images/composer-voice-entry.jpg',
+    'package/docs/images/voice-input-settings.jpg',
   ]
   for (const entry of required) {
     if (!entries.includes(entry)) throw new Error(`packed artifact is missing ${entry}`)
@@ -58,6 +73,7 @@ try {
     entryCount: entries.length,
     hostExports: exports,
     clientWrapper: true,
+    discoveryKeywords: requiredKeywords,
   }))
 } finally {
   try {

@@ -2,9 +2,11 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
+  checkLocalEndpoint,
   createLocalEndpointProvider,
   encodeMonoWav,
   localEndpointLanguage,
+  localHealthUrl,
   localTranscriptionUrl,
   resampleMonoPcm,
   type LocalEndpointAudioContext,
@@ -19,9 +21,13 @@ interface RuntimeFixture {
   readonly stopTrack: ReturnType<typeof vi.fn>
   readonly closeContext: ReturnType<typeof vi.fn>
   readonly fetchMock: ReturnType<typeof vi.fn>
+  readonly waitMock: ReturnType<typeof vi.fn>
 }
 
-function runtimeFixture(fetchImplementation: LocalEndpointRuntime['fetch']): RuntimeFixture {
+function runtimeFixture(
+  fetchImplementation: LocalEndpointRuntime['fetch'],
+  waitImplementation: NonNullable<LocalEndpointRuntime['wait']> = async () => {},
+): RuntimeFixture {
   const stopTrack = vi.fn()
   const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream
   const node = (): LocalEndpointAudioNode => ({ connect: vi.fn(), disconnect: vi.fn() })
@@ -40,16 +46,19 @@ function runtimeFixture(fetchImplementation: LocalEndpointRuntime['fetch']): Run
     close: closeContext,
   }
   const fetchMock = vi.fn(fetchImplementation)
+  const waitMock = vi.fn(waitImplementation)
   return {
     runtime: {
       getUserMedia: vi.fn(() => Promise.resolve(stream)),
       createAudioContext: vi.fn(() => context),
       fetch: fetchMock,
+      wait: waitMock,
     },
     processor,
     stopTrack,
     closeContext,
     fetchMock,
+    waitMock,
   }
 }
 
@@ -66,6 +75,35 @@ describe('local endpoint provider', () => {
     )
     expect(() => localTranscriptionUrl('https://example.com')).toThrow('本地服务地址必须使用')
     expect(() => localTranscriptionUrl('not a URL')).toThrow('本地服务地址无效')
+    expect(localHealthUrl('http://127.0.0.1:39081/v1')).toBe('http://127.0.0.1:39081/health')
+  })
+
+  it('tests the configured endpoint through its browser-visible health route', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      '{"status":"ok","models_loaded":["sensevoice"]}',
+      { status: 200 },
+    ))
+    const message = await checkLocalEndpoint(
+      'http://127.0.0.1:39081',
+      new AbortController().signal,
+      fetchMock,
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:39081/health', expect.objectContaining({
+      method: 'GET',
+    }))
+    expect(message).toBe('连接成功：本地 SenseVoice 服务已就绪')
+  })
+
+  it('does not mistake an unrelated healthy loopback service for SenseVoice', async () => {
+    await expect(checkLocalEndpoint(
+      'http://127.0.0.1:39081',
+      new AbortController().signal,
+      async () => new Response('{"status":"ok","models_loaded":[]}', { status: 200 }),
+    )).rejects.toMatchObject({
+      code: 'endpoint-response',
+      message: '本地服务尚未加载 SenseVoice 模型',
+    })
   })
 
   it('maps supported UI languages and safely falls back to auto', () => {
@@ -130,6 +168,66 @@ describe('local endpoint provider', () => {
     expect(onEnd).toHaveBeenCalledWith('stop')
     expect(fixture.stopTrack).toHaveBeenCalledOnce()
     expect(fixture.closeContext).toHaveBeenCalledOnce()
+    expect(fixture.waitMock).toHaveBeenCalledWith(600, expect.any(AbortSignal))
+  })
+
+  it('reports voice activity only after sustained speech energy', async () => {
+    const fixture = runtimeFixture(async () => new Response(JSON.stringify({ text: '' }), { status: 200 }))
+    const onProgress = vi.fn()
+    const session = await createLocalEndpointProvider({
+      endpoint: 'http://127.0.0.1:39081',
+      runtime: fixture.runtime,
+    }).start({ onProgress })
+
+    fixture.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(4_800).fill(0.001) },
+    })
+    fixture.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(4_800).fill(0.1) },
+    })
+    expect(onProgress).not.toHaveBeenCalledWith({ phase: 'voice', message: '已检测到语音' })
+
+    fixture.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(4_800).fill(0.1) },
+    })
+    fixture.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(4_800).fill(0.1) },
+    })
+    expect(onProgress.mock.calls.filter(([progress]) => progress.phase === 'voice')).toEqual([
+      [{ phase: 'voice', message: '已检测到语音' }],
+    ])
+    await session.abort()
+  })
+
+  it('keeps capturing for 600 ms after stop before closing the microphone', async () => {
+    let releaseWait: (() => void) | undefined
+    const fixture = runtimeFixture(
+      async () => new Response(JSON.stringify({ text: '保留尾音' }), { status: 200 }),
+      () => new Promise<void>(resolve => { releaseWait = resolve }),
+    )
+    const session = await createLocalEndpointProvider({
+      endpoint: 'http://127.0.0.1:39081',
+      runtime: fixture.runtime,
+    }).start()
+    fixture.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(4_800).fill(0.2) },
+    })
+
+    const stopping = session.stop()
+    await vi.waitFor(() => { expect(fixture.waitMock).toHaveBeenCalledWith(600, expect.any(AbortSignal)) })
+    expect(fixture.stopTrack).not.toHaveBeenCalled()
+    expect(fixture.fetchMock).not.toHaveBeenCalled()
+    fixture.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(4_800).fill(0.2) },
+    })
+
+    releaseWait?.()
+    await stopping
+
+    const [, init] = fixture.fetchMock.mock.calls[0] as [string, RequestInit]
+    const audio = (init.body as FormData).get('file') as File
+    expect(audio.size).toBeGreaterThan(6_000)
+    expect(fixture.stopTrack).toHaveBeenCalledOnce()
   })
 
   it('aborts an in-flight endpoint request without emitting a transcript', async () => {

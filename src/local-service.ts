@@ -3,6 +3,7 @@ import { access } from 'node:fs/promises'
 import { delimiter, isAbsolute } from 'node:path'
 import {
   LOCAL_SERVICE_ENDPOINT,
+  type LocalServiceStage,
   type LocalServiceStatus,
 } from './local-service-contract.ts'
 
@@ -33,6 +34,7 @@ export interface LocalServiceRuntime {
   fetch(input: string, init: RequestInit): Promise<Response>
   delay(milliseconds: number): Promise<void>
   executableAvailable(file: string, env: NodeJS.ProcessEnv): Promise<boolean>
+  now(): number
 }
 
 function processRuntime(): LocalServiceRuntime {
@@ -46,6 +48,7 @@ function processRuntime(): LocalServiceRuntime {
     }) as unknown as LocalServiceProcess,
     fetch: (input, init) => fetch(input, init),
     delay: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+    now: () => Date.now(),
     executableAvailable: async (file, env) => {
       if (isAbsolute(file)) {
         try {
@@ -81,7 +84,10 @@ export class LocalServiceController {
   private readonly workingDirectory: string
   private process: LocalServiceProcess | undefined
   private phase: LocalServiceStatus['phase'] = 'stopped'
+  private stage: LocalServiceStage = 'idle'
   private message = '本地服务未启动'
+  private progressPercent: number | null = null
+  private startedAt: number | undefined
   private output = ''
   private startPromise: Promise<LocalServiceStatus> | undefined
   private stopPromise: Promise<LocalServiceStatus> | undefined
@@ -96,9 +102,50 @@ export class LocalServiceController {
   private snapshot(managed = this.process !== undefined): LocalServiceStatus {
     return {
       phase: this.phase,
+      stage: this.stage,
       endpoint: LOCAL_SERVICE_ENDPOINT,
       managed,
       message: this.message,
+      progressPercent: this.progressPercent,
+      elapsedSeconds: this.startedAt === undefined
+        ? null
+        : Math.max(0, Math.floor((this.runtime.now() - this.startedAt) / 1_000)),
+    }
+  }
+
+  private updateStartupStatus(): void {
+    if (this.phase !== 'starting') return
+    const output = this.output.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+    const latestIndex = (pattern: RegExp): number => [...output.matchAll(pattern)].at(-1)?.index ?? -1
+    const healthIndex = latestIndex(/Application startup complete|Uvicorn running|Docs:\s+http|URL:\s+http/g)
+    const percentages = [...output.matchAll(/model\.pt:\s*(\d{1,3})%/g)]
+    const latestPercentage = percentages.at(-1)
+    const modelCheckIndex = latestIndex(/Downloading\s+\d+\s+files|download models from model hub/gi)
+    const downloadIndex = latestPercentage?.index ?? -1
+    const loadingIndex = latestIndex(/Loading fallback model|funasr version:/gi)
+    const latestStageIndex = Math.max(healthIndex, modelCheckIndex, downloadIndex, loadingIndex)
+    if (latestStageIndex === healthIndex && healthIndex >= 0) {
+      this.stage = 'checking-health'
+      this.message = 'SenseVoice 模型已加载，正在检查服务'
+      this.progressPercent = null
+      return
+    }
+    if (latestStageIndex === downloadIndex && downloadIndex >= 0) {
+      this.stage = 'downloading-model'
+      this.progressPercent = Math.min(100, Number(latestPercentage?.[1]))
+      this.message = `正在下载 SenseVoice 模型（${this.progressPercent}%）`
+      return
+    }
+    if (latestStageIndex === modelCheckIndex && modelCheckIndex >= 0) {
+      this.stage = 'checking-model'
+      this.progressPercent = null
+      this.message = '正在检查 SenseVoice 模型文件'
+      return
+    }
+    if (latestStageIndex === loadingIndex && loadingIndex >= 0) {
+      this.stage = 'loading-model'
+      this.message = '正在加载 SenseVoice 模型到内存'
+      this.progressPercent = null
     }
   }
 
@@ -121,18 +168,24 @@ export class LocalServiceController {
   async status(): Promise<LocalServiceStatus> {
     if (await this.healthy()) {
       this.phase = 'running'
+      this.stage = this.process === undefined ? 'external' : 'ready'
       this.message = this.process === undefined ? '检测到外部启动的本地服务' : '本地 SenseVoice 服务运行中'
+      this.progressPercent = null
       return this.snapshot()
     }
     if (this.phase === 'starting' || this.phase === 'stopping') return this.snapshot()
     if (this.process !== undefined) {
       this.phase = 'error'
+      this.stage = 'failed'
       this.message = '本地服务进程存在，但健康检查失败'
       return this.snapshot()
     }
     if (this.phase !== 'error') {
       this.phase = 'stopped'
+      this.stage = 'idle'
       this.message = '本地服务未启动'
+      this.progressPercent = null
+      this.startedAt = undefined
     }
     return this.snapshot(false)
   }
@@ -145,22 +198,31 @@ export class LocalServiceController {
   private async startImpl(origin: string): Promise<LocalServiceStatus> {
     if (await this.healthy()) {
       this.phase = 'running'
+      this.stage = this.process === undefined ? 'external' : 'ready'
       this.message = this.process === undefined ? '检测到外部启动的本地服务' : '本地 SenseVoice 服务运行中'
+      this.progressPercent = null
       return this.snapshot()
     }
     if (this.process !== undefined) {
       this.phase = 'error'
+      this.stage = 'failed'
       this.message = '旧的本地服务进程尚未退出'
       return this.snapshot()
     }
+    this.startedAt = this.runtime.now()
+    this.phase = 'starting'
+    this.stage = 'checking-runtime'
+    this.message = '正在检查 funasr-server 运行环境'
+    this.progressPercent = null
     if (!await this.runtime.executableAvailable(this.executable, this.runtime.env)) {
       this.phase = 'error'
+      this.stage = 'failed'
       this.message = '未找到 funasr-server；请在 DSH host 环境配置 DSH_DICTATE_FUNASR_SERVER'
       return this.snapshot(false)
     }
 
-    this.phase = 'starting'
-    this.message = '正在加载 SenseVoice 模型'
+    this.stage = 'starting-process'
+    this.message = '正在启动本地服务进程'
     this.output = ''
     this.requestedStop = false
     const child = this.runtime.spawn(this.executable, [
@@ -174,22 +236,35 @@ export class LocalServiceController {
       env: this.runtime.env,
     })
     this.process = child
-    child.stdout.on('data', chunk => { this.output = appendOutput(this.output, chunk) })
-    child.stderr.on('data', chunk => { this.output = appendOutput(this.output, chunk) })
+    child.stdout.on('data', chunk => {
+      this.output = appendOutput(this.output, chunk)
+      this.updateStartupStatus()
+    })
+    child.stderr.on('data', chunk => {
+      this.output = appendOutput(this.output, chunk)
+      this.updateStartupStatus()
+    })
     child.on('error', (error) => {
       if (this.process !== child) return
       this.process = undefined
       this.phase = 'error'
+      this.stage = 'failed'
       this.message = `无法启动本地服务：${error.message}`
     })
     child.on('exit', (code, signal) => {
       if (this.process !== child) return
       this.process = undefined
       if (this.requestedStop) {
-        this.phase = 'stopped'
-        this.message = '本地服务已停止'
+        if (this.phase !== 'error') {
+          this.phase = 'stopped'
+          this.stage = 'idle'
+          this.message = '本地服务已停止'
+          this.progressPercent = null
+          this.startedAt = undefined
+        }
       } else {
         this.phase = 'error'
+        this.stage = 'failed'
         const detail = this.output.trim().split('\n').at(-1)?.slice(0, 240)
         this.message = `本地服务意外退出（${signal ?? code ?? 'unknown'}）${detail === undefined ? '' : `：${detail}`}`
       }
@@ -204,17 +279,20 @@ export class LocalServiceController {
       if (this.process !== child) return this.snapshot(false)
       if (await this.healthy()) {
         this.phase = 'running'
+        this.stage = 'ready'
         this.message = '本地 SenseVoice 服务运行中'
+        this.progressPercent = null
         return this.snapshot(true)
       }
       await this.runtime.delay(READY_INTERVAL_MS)
     }
     this.phase = 'error'
+    this.stage = 'failed'
     const detail = this.output.trim().split('\n').at(-1)?.slice(0, 240)
     this.message = `SenseVoice 在 ${READY_TIMEOUT_MS / 1_000} 秒内未通过健康检查${detail === undefined ? '' : `：${detail}`}`
     this.requestedStop = true
     child.kill('SIGTERM')
-    return this.snapshot(true)
+    return this.snapshot(false)
   }
 
   async stop(): Promise<LocalServiceStatus> {
@@ -228,15 +306,22 @@ export class LocalServiceController {
     if (child === undefined) {
       if (await this.healthy()) {
         this.phase = 'running'
+        this.stage = 'external'
         this.message = '服务由插件外部启动，不能从此处停止'
+        this.progressPercent = null
         return this.snapshot(false)
       }
       this.phase = 'stopped'
+      this.stage = 'idle'
       this.message = '本地服务未启动'
+      this.progressPercent = null
+      this.startedAt = undefined
       return this.snapshot(false)
     }
     this.phase = 'stopping'
+    this.stage = 'stopping'
     this.message = '正在停止本地服务'
+    this.progressPercent = null
     this.requestedStop = true
     child.kill('SIGTERM')
     for (let elapsed = 0; elapsed < STOP_TIMEOUT_MS; elapsed += 100) {

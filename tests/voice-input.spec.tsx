@@ -104,6 +104,7 @@ describe('Contextual Dictation browser plugin', () => {
     updatePrefs({
       transcriptionProvider: 'web-speech',
       localEndpoint: 'http://127.0.0.1:39081',
+      localFallbackPolicy: 'local-only',
       lang: 'zh-CN',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
@@ -194,7 +195,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.change(screen.getByLabelText('识别语言'), { target: { value: 'ja-JP' } })
     expect(loadPrefs().lang).toBe('ja-JP')
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
 
     first.unmount()
@@ -207,6 +208,7 @@ describe('Contextual Dictation browser plugin', () => {
     expect(normalizePrefs({ lang: 'ja-JP' })).toEqual({
       transcriptionProvider: 'web-speech',
       localEndpoint: 'http://127.0.0.1:39081',
+      localFallbackPolicy: 'local-only',
       lang: 'ja-JP',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
@@ -217,6 +219,7 @@ describe('Contextual Dictation browser plugin', () => {
     expect(normalizePrefs({ lang: 'en-US', modelPolishEnabled: true, selectedModel: 'deepseek-chat' })).toEqual({
       transcriptionProvider: 'web-speech',
       localEndpoint: 'http://127.0.0.1:39081',
+      localFallbackPolicy: 'local-only',
       lang: 'en-US',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
@@ -238,6 +241,9 @@ describe('Contextual Dictation browser plugin', () => {
     const endpoint = screen.getByLabelText('本地服务地址') as HTMLInputElement
     expect(endpoint.value).toBe('http://127.0.0.1:39081')
     expect(screen.getByText(/不会在浏览器中下载模型/)).not.toBeNull()
+    expect((screen.getByLabelText('本地服务不可用时') as HTMLSelectElement).value).toBe('local-only')
+    fireEvent.change(screen.getByLabelText('本地服务不可用时'), { target: { value: 'ask' } })
+    expect(loadPrefs().localFallbackPolicy).toBe('ask')
     fireEvent.change(endpoint, { target: { value: '' } })
     expect((screen.getByLabelText('本地服务地址') as HTMLInputElement).value).toBe('')
     fireEvent.change(endpoint, { target: { value: 'http://localhost:41000/v1' } })
@@ -247,25 +253,66 @@ describe('Contextual Dictation browser plugin', () => {
     })
   })
 
+  it('tests the configured endpoint directly from plugin settings', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    const testEndpoint = vi.fn(async () => '连接成功：本地 SenseVoice 服务已就绪')
+    render(<SettingsPanel testEndpoint={testEndpoint} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+      await Promise.resolve()
+    })
+
+    expect(testEndpoint).toHaveBeenCalledWith(
+      'http://127.0.0.1:39081',
+      expect.any(AbortSignal),
+    )
+    expect(screen.getByText('连接成功：本地 SenseVoice 服务已就绪')).not.toBeNull()
+  })
+
+  it('shows a readable configured-endpoint connection failure', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    const testEndpoint = vi.fn(() => Promise.reject({ message: '连接被拒绝' }))
+    render(<SettingsPanel testEndpoint={testEndpoint} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole('alert').textContent).toContain('连接被拒绝')
+  })
+
   it('checks, starts, and stops the managed local service from plugin settings', async () => {
     updatePrefs({ transcriptionProvider: 'local-endpoint' })
     const status = vi.fn(async () => ({
       phase: 'stopped' as const,
+      stage: 'idle' as const,
       endpoint: 'http://127.0.0.1:39081',
       managed: false,
       message: '本地服务未启动',
+      progressPercent: null,
+      elapsedSeconds: null,
     }))
     const start = vi.fn(async () => ({
       phase: 'running' as const,
+      stage: 'ready' as const,
       endpoint: 'http://127.0.0.1:39081',
       managed: true,
       message: '本地 SenseVoice 服务运行中',
+      progressPercent: null,
+      elapsedSeconds: 8,
     }))
     const stop = vi.fn(async () => ({
       phase: 'stopped' as const,
+      stage: 'idle' as const,
       endpoint: 'http://127.0.0.1:39081',
       managed: false,
       message: '本地服务已停止',
+      progressPercent: null,
+      elapsedSeconds: null,
     }))
     render(<SettingsPanel localService={{ status, start, stop }} />)
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
@@ -290,6 +337,59 @@ describe('Contextual Dictation browser plugin', () => {
     })
     expect(stop).toHaveBeenCalledWith(expect.any(AbortSignal))
     expect(screen.getByRole('status').textContent).toContain('本地服务已停止')
+  })
+
+  it('shows real startup progress, cancel, retry, and diagnostics', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    const status = vi.fn(async () => ({
+      phase: 'starting' as const,
+      stage: 'downloading-model' as const,
+      endpoint: 'http://127.0.0.1:39081',
+      managed: true,
+      message: '正在下载 SenseVoice 模型（42%）',
+      progressPercent: 42,
+      elapsedSeconds: 17,
+    }))
+    const start = vi.fn(async () => ({
+      phase: 'error' as const,
+      stage: 'failed' as const,
+      endpoint: 'http://127.0.0.1:39081',
+      managed: false,
+      message: '未找到 funasr-server',
+      progressPercent: null,
+      elapsedSeconds: 1,
+    }))
+    const stop = vi.fn(async () => ({
+      phase: 'stopped' as const,
+      stage: 'idle' as const,
+      endpoint: 'http://127.0.0.1:39081',
+      managed: false,
+      message: '本地服务已停止',
+      progressPercent: null,
+      elapsedSeconds: null,
+    }))
+    render(<SettingsPanel localService={{ status, start, stop }} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    await act(async () => { await Promise.resolve() })
+
+    expect((screen.getByRole('progressbar', {
+      name: 'SenseVoice 模型下载进度',
+    }) as HTMLProgressElement).value).toBe(42)
+    expect(screen.getByRole('button', { name: '取消启动' })).not.toBeNull()
+    fireEvent.click(screen.getByText('诊断信息'))
+    expect(screen.getByText(/阶段：下载模型/).textContent).toContain('已用时：17 秒')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '取消启动' }))
+      await Promise.resolve()
+    })
+    expect(stop).toHaveBeenCalledWith(expect.any(AbortSignal))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '启动服务' }))
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('button', { name: '重新启动服务' })).not.toBeNull()
   })
 
   it('shows mixed-language optimization for every Chinese language and preserves it while inactive', () => {
@@ -328,7 +428,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(loadPrefs().selectedModel).toBe('deepseek-reasoner')
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
     )
   })
 
@@ -345,7 +445,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(toggle)
     expect(loadPrefs().autoSendEnabled).toBe(true)
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
     )
   })
 
@@ -360,7 +460,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(shortcut)
     expect(loadPrefs().composerShortcutEnabled).toBe(true)
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
   })
 
@@ -396,7 +496,8 @@ describe('Contextual Dictation browser plugin', () => {
     act(() => { recognition?.finishWith('测试转写') })
     expect(setDraft).toHaveBeenCalledWith('测试转写')
     expect(submit).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toContain('语音已转入输入框，请检查后发送')
+    expect(screen.getByRole('status').textContent).toContain('已转写完成')
+    expect(screen.getByRole('status').textContent).toContain('转写结果已写入输入框，请检查后发送')
     expect(document.querySelector('[data-transcription-final]')).toBeNull()
 
     act(() => { vi.advanceTimersByTime(2999) })
@@ -438,7 +539,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(button)
     expect(FakeRecognition.instances).toHaveLength(0)
     expect(button.getAttribute('title')).toBe('点击结束并转写')
-    expect(screen.getByRole('status').textContent).toContain('正在录音')
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在录音中')
     expect(screen.getByRole('status').textContent).toContain('再次点击麦克风结束并转写')
     expect(screen.getByRole('status').textContent).not.toContain('请开始说话')
     expect(setDraft).not.toHaveBeenCalled()
@@ -447,7 +548,227 @@ describe('Contextual Dictation browser plugin', () => {
     expect(stop).toHaveBeenCalledOnce()
     expect(setDraft).toHaveBeenCalledWith('已有文字 本地端点结果')
     expect(submit).toHaveBeenCalledOnce()
-    expect(screen.getByRole('status').textContent).toContain('转写结果已交给 DSH 发送')
+    expect(screen.getByRole('status').textContent).toContain('已转写完成')
+    expect(screen.getByRole('status').textContent).toContain('转写结果已直接发送')
+  })
+
+  it('keeps five-character titles and phase-aware auxiliary copy through local ASR', () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    let callbacks: AsrProviderStartOptions | undefined
+    const provider: AsrProvider = {
+      start: vi.fn((options = {}) => {
+        callbacks = options
+        options.onStart?.()
+        return {
+          stop: vi.fn(async () => {}),
+          abort: vi.fn(async () => { options.onEnd?.('abort') }),
+          updateTerms: vi.fn(async () => {}),
+        }
+      }),
+    }
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'local-copy-session',
+      providers: { 'local-endpoint': provider },
+    }))
+
+    const button = screen.getByRole('button', { name: '语音输入' })
+    fireEvent.click(button)
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在录音中')
+    expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
+      '再次点击麦克风结束并转写',
+    )
+
+    act(() => { callbacks?.onProgress?.({ phase: 'voice', message: '已检测到语音' }) })
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在录音中')
+    expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
+      '已检测到语音',
+    )
+
+    fireEvent.click(button)
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在转写中')
+    expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
+      '正在保留结尾语音',
+    )
+
+    act(() => { callbacks?.onProgress?.({ phase: 'runtime', message: '正在由本地服务转写' }) })
+    const title = document.querySelector('[data-transcription-title]')?.textContent ?? ''
+    expect(title).toBe('正在转写中')
+    expect(Array.from(title)).toHaveLength(5)
+    expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
+      '本地服务正在识别语音，请稍候',
+    )
+  })
+
+  it('only shows the microphone authorization state after a two-second delay', () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    const provider: AsrProvider = {
+      start: vi.fn(() => new Promise<never>(() => {})),
+    }
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'local-permission-session',
+      providers: { 'local-endpoint': provider },
+    }))
+
+    const button = screen.getByRole('button', { name: '语音输入' })
+    fireEvent.click(button)
+    expect(document.querySelector('[data-transcription-title]')).toBeNull()
+
+    act(() => { vi.advanceTimersByTime(1999) })
+    expect(document.querySelector('[data-transcription-title]')).toBeNull()
+
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('等待授权中')
+    expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
+      '请按浏览器提示允许麦克风访问',
+    )
+
+    fireEvent.click(button)
+    expect(document.querySelector('[data-transcription-title]')).toBeNull()
+  })
+
+  it('asks before falling back to Web Speech when the local preflight fails', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint', localFallbackPolicy: 'ask' })
+    const checkLocalEndpoint = vi.fn(() => Promise.reject({ message: '本地服务未启动' }))
+    const localStart = vi.fn()
+    const webStart = vi.fn((options: AsrProviderStartOptions = {}) => {
+      options.onStart?.()
+      return {
+        stop: vi.fn(async () => {}),
+        abort: vi.fn(async () => { options.onEnd?.('abort') }),
+        updateTerms: vi.fn(async () => {}),
+      }
+    })
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'local-fallback-ask',
+      checkLocalEndpoint,
+      providers: {
+        'local-endpoint': { start: localStart },
+        'web-speech': { start: webStart },
+      },
+    }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+      await Promise.resolve()
+    })
+
+    expect(localStart).not.toHaveBeenCalled()
+    expect(webStart).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('是否改用 Web Speech')
+    fireEvent.click(screen.getByRole('button', { name: '改用 Web Speech' }))
+    expect(webStart).toHaveBeenCalledOnce()
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在听写中')
+    expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
+      '已按设置改用 Web Speech',
+    )
+  })
+
+  it('keeps a failed local preflight local-only by default', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint', localFallbackPolicy: 'local-only' })
+    const localStart = vi.fn()
+    const webStart = vi.fn()
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'local-fallback-disabled',
+      checkLocalEndpoint: () => Promise.reject({ message: '本地服务未启动' }),
+      providers: {
+        'local-endpoint': { start: localStart },
+        'web-speech': { start: webStart },
+      },
+    }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+      await Promise.resolve()
+    })
+
+    expect(localStart).not.toHaveBeenCalled()
+    expect(webStart).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('本地服务未启动')
+    expect(screen.queryByRole('button', { name: '改用 Web Speech' })).toBeNull()
+  })
+
+  it('automatically falls back before recording only when the user allowed it', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint', localFallbackPolicy: 'web-speech' })
+    const localStart = vi.fn()
+    const webStart = vi.fn((options: AsrProviderStartOptions = {}) => {
+      options.onStart?.()
+      return {
+        stop: vi.fn(async () => {}),
+        abort: vi.fn(async () => { options.onEnd?.('abort') }),
+        updateTerms: vi.fn(async () => {}),
+      }
+    })
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'local-fallback-auto',
+      checkLocalEndpoint: () => Promise.reject({ message: '本地服务未启动' }),
+      providers: {
+        'local-endpoint': { start: localStart },
+        'web-speech': { start: webStart },
+      },
+    }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+      await Promise.resolve()
+    })
+
+    expect(localStart).not.toHaveBeenCalled()
+    expect(webStart).toHaveBeenCalledOnce()
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在听写中')
+    expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
+      '已按设置改用 Web Speech',
+    )
+  })
+
+  it('never falls back after local audio has already been recorded', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint', localFallbackPolicy: 'web-speech' })
+    let callbacks: AsrProviderStartOptions | undefined
+    const localStart = vi.fn((options: AsrProviderStartOptions = {}) => {
+      callbacks = options
+      options.onStart?.()
+      return {
+        stop: vi.fn(async () => {
+          options.onError?.({ code: 'endpoint-unreachable', message: '本地转写服务中断' })
+          options.onEnd?.('error')
+        }),
+        abort: vi.fn(async () => { options.onEnd?.('abort') }),
+        updateTerms: vi.fn(async () => {}),
+      }
+    })
+    const webStart = vi.fn()
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'local-no-post-recording-fallback',
+      checkLocalEndpoint: () => Promise.resolve('连接成功'),
+      providers: {
+        'local-endpoint': { start: localStart },
+        'web-speech': { start: webStart },
+      },
+    }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+      await Promise.resolve()
+    })
+    expect(callbacks).toBeDefined()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+      await Promise.resolve()
+    })
+
+    expect(webStart).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('本地转写服务中断')
   })
 
   it('shows a readable local endpoint startup failure', async () => {
@@ -778,7 +1099,7 @@ describe('Contextual Dictation browser plugin', () => {
       { text: '天气不错', final: false },
     ) })
 
-    expect(screen.getByRole('status').textContent).toContain('正在听写')
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在听写中')
     expect(screen.getByRole('status').textContent).toContain('今天晚上')
     expect(screen.getByRole('status').textContent).toContain('天气不错')
     expect(setDraft).not.toHaveBeenCalled()
@@ -797,8 +1118,8 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(button)
     act(() => { recognition?.emitResults({ text: '停止后的最终结果', final: true }) })
 
-    expect(screen.getByRole('status').textContent).toContain('正在确认文字')
-    expect(screen.getByRole('status').textContent).not.toContain('正在听写')
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在确认中')
+    expect(screen.getByRole('status').textContent).not.toContain('正在听写中')
     expect(setDraft).not.toHaveBeenCalled()
 
     act(() => { recognition?.onend?.() })
@@ -827,7 +1148,8 @@ describe('Contextual Dictation browser plugin', () => {
     expect(setDraft).toHaveBeenCalledWith('已有文字 原始转写')
     expect(submit).toHaveBeenCalledOnce()
     expect(setDraft.mock.invocationCallOrder[0]).toBeLessThan(submit.mock.invocationCallOrder[0] ?? 0)
-    expect(screen.getByRole('status').textContent).toContain('转写结果已交给 DSH 发送')
+    expect(screen.getByRole('status').textContent).toContain('已转写完成')
+    expect(screen.getByRole('status').textContent).toContain('转写结果已直接发送')
     expect(document.querySelector('[data-transcription-final]')).toBeNull()
   })
 
@@ -845,7 +1167,8 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(setDraft).toHaveBeenCalledWith('浏览器自行结束')
     expect(submit).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toContain('语音已转入输入框，请检查后发送')
+    expect(screen.getByRole('status').textContent).toContain('已转写完成')
+    expect(screen.getByRole('status').textContent).toContain('转写结果已写入输入框，请检查后发送')
   })
 
   it('shows a provisional transcript and Composer destination while polishing', async () => {
@@ -867,7 +1190,7 @@ describe('Contextual Dictation browser plugin', () => {
     act(() => { recognition?.onstart?.() })
     act(() => { recognition?.finishWith('深度求索哈尼斯') })
 
-    expect(screen.getByRole('status').textContent).toContain('模型润色中')
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在润色中')
     expect(screen.getByRole('status').textContent).toContain('初步识别（非最终）：')
     expect(screen.getByRole('status').textContent).toContain('深度求索哈尼斯')
     expect(screen.getByRole('status').textContent).toContain('润色后将写入输入框')
@@ -883,7 +1206,8 @@ describe('Contextual Dictation browser plugin', () => {
     await act(async () => { resolvePolish?.('DeepSeek Harness') })
     expect(setDraft).toHaveBeenCalledWith('前文 DeepSeek Harness')
     expect(submit).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toContain('润色完成，已写入输入框')
+    expect(screen.getByRole('status').textContent).toContain('已润色完成')
+    expect(screen.getByRole('status').textContent).toContain('最终结果已写入输入框')
   })
 
   it('starts polishing immediately when background terms are still pending', () => {
@@ -937,7 +1261,8 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(setDraft).toHaveBeenCalledWith('原始转写')
     expect(submit).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toContain('模型润色失败，已保留原始转写')
+    expect(screen.getByRole('alert').textContent).toContain('润色未完成')
+    expect(screen.getByRole('alert').textContent).toContain('原始转写已写入输入框')
   })
 
   it('automatically sends the polished result after model polishing succeeds', async () => {
@@ -971,7 +1296,8 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(setDraft).toHaveBeenCalledWith('润色结果')
     expect(submit).toHaveBeenCalledOnce()
-    expect(screen.getByRole('status').textContent).toContain('润色完成，已直接发送')
+    expect(screen.getByRole('status').textContent).toContain('已润色完成')
+    expect(screen.getByRole('status').textContent).toContain('最终结果已直接发送')
     expect(document.querySelector('[data-transcription-final]')).toBeNull()
   })
 
@@ -998,7 +1324,8 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(setDraft).toHaveBeenCalledWith('润色结果')
     expect(submit).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toContain('润色完成，已写入输入框')
+    expect(screen.getByRole('status').textContent).toContain('已润色完成')
+    expect(screen.getByRole('status').textContent).toContain('最终结果已写入输入框')
   })
 
   it('automatically sends the original transcript when model polishing fails', async () => {
@@ -1026,7 +1353,8 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(setDraft).toHaveBeenCalledWith('原始转写')
     expect(submit).toHaveBeenCalledOnce()
-    expect(screen.getByRole('alert').textContent).toContain('模型润色失败，原始转写已交给 DSH 发送')
+    expect(screen.getByRole('alert').textContent).toContain('润色未完成')
+    expect(screen.getByRole('alert').textContent).toContain('原始转写已直接发送')
     expect(document.querySelector('[data-transcription-final]')).toBeNull()
   })
 })

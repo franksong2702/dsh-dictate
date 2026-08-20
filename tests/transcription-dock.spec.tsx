@@ -73,23 +73,33 @@ describe('TranscriptionDock', () => {
 
     render(<TranscriptionDock sessionId="dock-render" />)
     expect(screen.getByRole('status')).not.toBeNull()
-    expect(screen.getByText('正在听写')).not.toBeNull()
+    expect(screen.getByText('正在听写中')).not.toBeNull()
     expect(screen.getByText('已经确认')).not.toBeNull()
     const interim = screen.getByText('还在识别')
     expect(interim.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
   })
 
   it.each([
-    ['preparing', '正在准备本地录音', '正在连接麦克风…'],
-    ['listening', '正在录音', '再次点击麦克风结束并转写'],
-    ['listening', '正在听写', '请开始说话…'],
-    ['finalizing', '正在整理录音', '请稍候，正在准备音频…'],
-    ['finalizing', '正在由本地服务转写', '请稍候，正在识别语音…'],
-    ['finalizing', '正在确认文字', '请稍候，正在确认识别结果…'],
-  ] as const)('shows the phase-aware empty preview for %s / %s', (phase, status, hint) => {
+    ['preparing', '等待授权中', '请按浏览器提示允许麦克风访问…', '等待授权中'],
+    ['listening', '正在录音中', '再次点击麦克风结束并转写', '正在录音中'],
+    ['listening', '正在听写中', '请开始说话…', '正在听写中'],
+    ['finalizing', '正在转写中', '录音已结束，正在准备音频…', '正在转写中'],
+    ['finalizing', '正在转写中', '本地服务正在识别语音，请稍候…', '正在转写中'],
+    ['finalizing', '正在确认中', '正在确认识别结果，请稍候…', '正在确认中'],
+  ] as const)('shows a fixed five-character title and auxiliary copy for %s / %s', (
+    phase,
+    status,
+    hint,
+    expectedTitle,
+  ) => {
     updateTranscription('dock-render', { phase, status, hint, finalText: '', interimText: '' })
 
     render(<TranscriptionDock sessionId="dock-render" />)
+    const title = document.querySelector('[data-transcription-title]')
+    const auxiliary = document.querySelector('[data-transcription-auxiliary]')
+    expect(title?.textContent).toBe(expectedTitle)
+    expect(Array.from(title?.textContent ?? '')).toHaveLength(5)
+    expect(auxiliary?.textContent?.trim()).not.toBe('')
     const preview = screen.getByText(hint)
     expect(preview.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
   })
@@ -111,12 +121,13 @@ describe('TranscriptionDock', () => {
   it('marks the polishing transcript as provisional and explains its destination', () => {
     updateTranscription('dock-render', {
       phase: 'polishing',
-      status: '模型润色中',
+      status: '正在润色中',
       finalText: '初步转写',
       hint: '润色后将写入输入框',
     })
 
     render(<TranscriptionDock sessionId="dock-render" />)
+    expect(screen.getByText('正在润色中')).not.toBeNull()
     const label = screen.getByText('初步识别（非最终）：')
     const destination = screen.getByText('· 润色后将写入输入框')
     expect(label.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
@@ -126,14 +137,22 @@ describe('TranscriptionDock', () => {
   })
 
   it.each([
-    ['complete', '转写完成', 'status'],
-    ['error', '转写失败', 'alert'],
-  ] as const)('renders %s with its exact title, preview, and ARIA role', (phase, title, role) => {
-    updateTranscription('dock-render', { phase, status: title, finalText: '预览原文' })
+    ['complete', '已转写完成', '结果已写入输入框', 'status'],
+    ['complete', '已润色完成', '最终结果已写入输入框', 'status'],
+    ['error', '转写未完成', '没有识别到语音，请重试', 'alert'],
+    ['error', '润色未完成', '原始转写已写入输入框', 'alert'],
+  ] as const)('renders %s with a fixed title, auxiliary copy, and ARIA role', (
+    phase,
+    title,
+    hint,
+    role,
+  ) => {
+    updateTranscription('dock-render', { phase, status: title, hint, finalText: '' })
 
     render(<TranscriptionDock sessionId="dock-render" />)
     expect(screen.getByRole(role, { name: title })).not.toBeNull()
     expect(screen.getByText(title)).not.toBeNull()
-    expect(screen.getByText('预览原文')).not.toBeNull()
+    expect(Array.from(title)).toHaveLength(5)
+    expect(screen.getByText(hint)).not.toBeNull()
   })
 })

@@ -11,6 +11,9 @@ import {
 export const LOCAL_ENDPOINT_MODEL = 'sensevoice'
 const TARGET_SAMPLE_RATE = 16_000
 const PROCESSOR_BUFFER_SIZE = 4096
+const DEFAULT_TAIL_CAPTURE_MS = 600
+const VAD_RMS_THRESHOLD = 0.015
+const VAD_MIN_ACTIVE_MS = 120
 
 export interface LocalEndpointAudioNode {
   connect(destination: unknown): unknown
@@ -45,12 +48,14 @@ export interface LocalEndpointRuntime {
   getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream>
   createAudioContext(options?: AudioContextOptions): LocalEndpointAudioContext
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>
+  wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>
 }
 
 export interface LocalEndpointProviderOptions {
   readonly endpoint: string
   readonly model?: string
   readonly runtime?: LocalEndpointRuntime
+  readonly tailCaptureMs?: number
 }
 
 interface CaptureResources {
@@ -81,6 +86,19 @@ function browserRuntime(): LocalEndpointRuntime {
   }
 }
 
+function waitForDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (milliseconds <= 0 || signal.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    const finish = (): void => {
+      window.clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = window.setTimeout(finish, milliseconds)
+    signal.addEventListener('abort', finish, { once: true })
+  })
+}
+
 /** Resolve a loopback-only base URL to the OpenAI-compatible transcription route. */
 export function localTranscriptionUrl(value: string): string {
   let url: URL
@@ -99,6 +117,50 @@ export function localTranscriptionUrl(value: string): string {
   if (path === '' || path === '/') url.pathname = '/v1/audio/transcriptions'
   else if (path === '/v1') url.pathname = '/v1/audio/transcriptions'
   return url.href
+}
+
+/** Resolve the browser-visible health route for a loopback SenseVoice endpoint. */
+export function localHealthUrl(value: string): string {
+  const transcription = new URL(localTranscriptionUrl(value))
+  transcription.pathname = '/health'
+  transcription.search = ''
+  transcription.hash = ''
+  return transcription.href
+}
+
+/** Verify the configured endpoint from the browser, including its CORS boundary. */
+export async function checkLocalEndpoint(
+  endpoint: string,
+  signal: AbortSignal,
+  fetcher: LocalEndpointRuntime['fetch'] = (input, init) => fetch(input, init),
+): Promise<string> {
+  let response: Response
+  try {
+    response = await fetcher(localHealthUrl(endpoint), { method: 'GET', signal })
+  } catch (cause) {
+    if (signal.aborted) throw asrProviderError('aborted', '连接测试已取消', cause)
+    throw asrProviderError(
+      'endpoint-unreachable',
+      '无法连接本地服务，请确认服务已启动并允许当前 DSH 地址跨域访问',
+      cause,
+    )
+  }
+  if (!response.ok) {
+    throw asrProviderError('endpoint-response', `本地服务健康检查返回 HTTP ${response.status}`)
+  }
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch (cause) {
+    throw asrProviderError('endpoint-response', '本地服务健康检查返回了无法解析的结果', cause)
+  }
+  if (typeof payload !== 'object' || payload === null
+    || (payload as { readonly status?: unknown }).status !== 'ok'
+    || !Array.isArray((payload as { readonly models_loaded?: unknown }).models_loaded)
+    || !(payload as { readonly models_loaded: unknown[] }).models_loaded.includes(LOCAL_ENDPOINT_MODEL)) {
+    throw asrProviderError('endpoint-response', '本地服务尚未加载 SenseVoice 模型')
+  }
+  return '连接成功：本地 SenseVoice 服务已就绪'
 }
 
 /** Map the UI BCP-47 language to the language hints accepted by SenseVoice. */
@@ -196,6 +258,7 @@ function transcriptText(payload: unknown): string | undefined {
 export function createLocalEndpointProvider(options: LocalEndpointProviderOptions): AsrProvider {
   const runtime = options.runtime ?? browserRuntime()
   const model = options.model ?? LOCAL_ENDPOINT_MODEL
+  const tailCaptureMs = Math.max(0, Math.min(2_000, options.tailCaptureMs ?? DEFAULT_TAIL_CAPTURE_MS))
   return {
     async start(callbacks: AsrProviderStartOptions = {}): Promise<AsrProviderSession> {
       const endpoint = localTranscriptionUrl(options.endpoint)
@@ -232,6 +295,8 @@ export function createLocalEndpointProvider(options: LocalEndpointProviderOption
       let processor: LocalEndpointAudioProcessor | undefined
       let gain: LocalEndpointAudioGain | undefined
       const chunks: Float32Array[] = []
+      let activeVoiceSamples = 0
+      let voiceDetected = false
       try {
         source = context.createMediaStreamSource(stream)
         processor = context.createScriptProcessor(PROCESSOR_BUFFER_SIZE, 1, 1)
@@ -240,6 +305,17 @@ export function createLocalEndpointProvider(options: LocalEndpointProviderOption
         processor.onaudioprocess = event => {
           const samples = event.inputBuffer.getChannelData(0)
           chunks.push(new Float32Array(samples))
+          if (voiceDetected) return
+          let squareSum = 0
+          for (const sample of samples) squareSum += sample * sample
+          const rms = samples.length === 0 ? 0 : Math.sqrt(squareSum / samples.length)
+          activeVoiceSamples = rms >= VAD_RMS_THRESHOLD
+            ? activeVoiceSamples + samples.length
+            : 0
+          if (activeVoiceSamples * 1_000 / context.sampleRate >= VAD_MIN_ACTIVE_MS) {
+            voiceDetected = true
+            callbacks.onProgress?.({ phase: 'voice', message: '已检测到语音' })
+          }
         }
         source.connect(processor)
         if (gain !== undefined) {
@@ -315,6 +391,14 @@ export function createLocalEndpointProvider(options: LocalEndpointProviderOption
         if (closePromise !== undefined) return closePromise
         closePromise = (async () => {
           emitAsrStatus(callbacks, 'stopping')
+          callbacks.onProgress?.({ phase: 'audio', message: '正在保留结尾语音' })
+          await (runtime.wait?.(tailCaptureMs, requestController.signal)
+            ?? waitForDelay(tailCaptureMs, requestController.signal))
+          if (requestController.signal.aborted) {
+            await cleanup()
+            endOnce('abort')
+            return
+          }
           callbacks.onProgress?.({ phase: 'audio', message: '正在整理录音' })
           await cleanup()
           if (requestController.signal.aborted) {
