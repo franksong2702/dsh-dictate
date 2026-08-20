@@ -4,6 +4,14 @@ export interface LanguageOption {
   readonly label: string
 }
 
+/** Speech-recognition routes exposed by the plugin. */
+export type TranscriptionProviderId = 'web-speech' | 'local-endpoint'
+
+/** User-authorized behavior when the local endpoint is unavailable before recording starts. */
+export type LocalFallbackPolicy = 'local-only' | 'ask' | 'web-speech'
+
+export const DEFAULT_LOCAL_ENDPOINT = 'http://127.0.0.1:39081'
+
 /** Languages exposed by the Contextual Dictation settings page. */
 export const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
   { value: 'zh-CN', label: '中文（普通话）' },
@@ -20,6 +28,9 @@ export const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
 
 /** Browser-local Contextual Dictation preferences. */
 export interface VoiceInputPrefs {
+  readonly transcriptionProvider: TranscriptionProviderId
+  readonly localEndpoint: string
+  readonly localFallbackPolicy: LocalFallbackPolicy
   readonly lang: string
   readonly mixedLanguageOptimizationEnabled: boolean
   readonly composerShortcutEnabled: boolean
@@ -29,6 +40,9 @@ export interface VoiceInputPrefs {
 }
 
 export const DEFAULT_PREFS: VoiceInputPrefs = {
+  transcriptionProvider: 'web-speech',
+  localEndpoint: DEFAULT_LOCAL_ENDPOINT,
+  localFallbackPolicy: 'local-only',
   lang: 'zh-CN',
   mixedLanguageOptimizationEnabled: false,
   composerShortcutEnabled: false,
@@ -39,6 +53,8 @@ export const DEFAULT_PREFS: VoiceInputPrefs = {
 export const PREFS_KEY = 'dsh-dictate.prefs.v1'
 
 const languageValues = new Set(LANGUAGE_OPTIONS.map(option => option.value))
+const transcriptionProviderValues = new Set<TranscriptionProviderId>(['web-speech', 'local-endpoint'])
+const localFallbackPolicyValues = new Set<LocalFallbackPolicy>(['local-only', 'ask', 'web-speech'])
 const listeners = new Set<() => void>()
 let currentPrefs: VoiceInputPrefs | undefined
 
@@ -55,6 +71,9 @@ function browserStorage(): Storage | undefined {
 export function normalizePrefs(raw: unknown): VoiceInputPrefs {
   if (typeof raw !== 'object' || raw === null || !('lang' in raw)) return DEFAULT_PREFS
   const candidate = raw as {
+    transcriptionProvider?: unknown
+    localEndpoint?: unknown
+    localFallbackPolicy?: unknown
     lang?: unknown
     mixedLanguageOptimizationEnabled?: unknown
     composerShortcutEnabled?: unknown
@@ -64,6 +83,17 @@ export function normalizePrefs(raw: unknown): VoiceInputPrefs {
   }
   if (typeof candidate.lang !== 'string' || !languageValues.has(candidate.lang)) return DEFAULT_PREFS
   return {
+    transcriptionProvider: typeof candidate.transcriptionProvider === 'string'
+      && transcriptionProviderValues.has(candidate.transcriptionProvider as TranscriptionProviderId)
+      ? candidate.transcriptionProvider as TranscriptionProviderId
+      : DEFAULT_PREFS.transcriptionProvider,
+    localEndpoint: typeof candidate.localEndpoint === 'string'
+      ? candidate.localEndpoint
+      : DEFAULT_PREFS.localEndpoint,
+    localFallbackPolicy: typeof candidate.localFallbackPolicy === 'string'
+      && localFallbackPolicyValues.has(candidate.localFallbackPolicy as LocalFallbackPolicy)
+      ? candidate.localFallbackPolicy as LocalFallbackPolicy
+      : DEFAULT_PREFS.localFallbackPolicy,
     lang: candidate.lang,
     mixedLanguageOptimizationEnabled: typeof candidate.mixedLanguageOptimizationEnabled === 'boolean'
       ? candidate.mixedLanguageOptimizationEnabled

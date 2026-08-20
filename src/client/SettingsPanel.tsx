@@ -1,6 +1,40 @@
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { LANGUAGE_OPTIONS, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
+import type { LocalServiceStatus } from '../local-service-contract.ts'
+
+const SERVICE_STAGE_LABELS: Record<LocalServiceStatus['stage'], string> = {
+  idle: '未启动',
+  'checking-runtime': '检查运行环境',
+  'starting-process': '启动服务进程',
+  'checking-model': '检查模型文件',
+  'downloading-model': '下载模型',
+  'loading-model': '加载模型',
+  'checking-health': '检查服务',
+  ready: '已就绪',
+  external: '外部服务',
+  stopping: '停止服务',
+  failed: '启动失败',
+}
+
+function serviceDiagnostics(status: LocalServiceStatus): string {
+  const values = [
+    `阶段：${SERVICE_STAGE_LABELS[status.stage]}`,
+    `端点：${status.endpoint}`,
+    `管理方式：${status.managed ? '插件管理' : '外部或未启动'}`,
+  ]
+  if (status.elapsedSeconds !== null) values.push(`已用时：${status.elapsedSeconds} 秒`)
+  if (status.progressPercent !== null) values.push(`下载进度：${status.progressPercent}%`)
+  return values.join(' · ')
+}
+
+function readableError(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error !== null && 'message' in error
+    && typeof (error as { readonly message?: unknown }).message === 'string') {
+    return (error as { readonly message: string }).message
+  }
+  return fallback
+}
 
 /** One model exposed by the host for optional transcript polishing. */
 export interface ModelOption {
@@ -11,12 +45,98 @@ export interface ModelOption {
 /** Read-only host inputs for the Contextual Dictation settings card. */
 export interface SettingsPanelProps {
   readonly modelOptions?: readonly ModelOption[]
+  readonly testEndpoint?: (endpoint: string, signal: AbortSignal) => Promise<string>
+  readonly localService?: {
+    readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly stop: (signal: AbortSignal) => Promise<LocalServiceStatus>
+  }
 }
 
 /** Render the browser-local Contextual Dictation card inside Plugin configuration. */
-export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): ReactNode {
+export function SettingsPanel({
+  modelOptions = [],
+  testEndpoint,
+  localService,
+}: SettingsPanelProps = {}): ReactNode {
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
   const [open, setOpen] = useState(false)
+  const [serviceStatus, setServiceStatus] = useState<LocalServiceStatus>()
+  const [serviceBusy, setServiceBusy] = useState(false)
+  const [serviceError, setServiceError] = useState('')
+  const [endpointTestBusy, setEndpointTestBusy] = useState(false)
+  const [endpointTestResult, setEndpointTestResult] = useState<{ ok: boolean; message: string }>()
+  const endpointTestControllerRef = useRef<AbortController>()
+
+  useEffect(() => () => { endpointTestControllerRef.current?.abort() }, [])
+
+  useEffect(() => {
+    endpointTestControllerRef.current?.abort()
+    endpointTestControllerRef.current = undefined
+    setEndpointTestBusy(false)
+    setEndpointTestResult(undefined)
+  }, [prefs.localEndpoint])
+
+  useEffect(() => {
+    if (prefs.transcriptionProvider !== 'local-endpoint' || localService === undefined) return
+    const controller = new AbortController()
+    const refresh = (): void => {
+      void localService.status(controller.signal).then((status) => {
+        if (!controller.signal.aborted) {
+          setServiceStatus(status)
+          setServiceError('')
+        }
+      }, (error: unknown) => {
+        if (!controller.signal.aborted) {
+          setServiceError(readableError(error, '无法检查本地服务状态'))
+        }
+      })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 3000)
+    return () => {
+      controller.abort()
+      window.clearInterval(timer)
+    }
+  }, [localService, prefs.transcriptionProvider])
+
+  const runServiceAction = (
+    action: (signal: AbortSignal) => Promise<LocalServiceStatus>,
+  ): void => {
+    const controller = new AbortController()
+    setServiceBusy(true)
+    setServiceError('')
+    void action(controller.signal).then((status) => {
+      setServiceStatus(status)
+      if (status.phase === 'running') updatePrefs({ localEndpoint: status.endpoint })
+    }, (error: unknown) => {
+      setServiceError(readableError(error, '本地服务操作失败'))
+    }).finally(() => { setServiceBusy(false) })
+  }
+
+  const runEndpointTest = (): void => {
+    if (testEndpoint === undefined) return
+    endpointTestControllerRef.current?.abort()
+    const controller = new AbortController()
+    endpointTestControllerRef.current = controller
+    setEndpointTestBusy(true)
+    setEndpointTestResult(undefined)
+    void testEndpoint(prefs.localEndpoint, controller.signal).then((message) => {
+      if (!controller.signal.aborted) setEndpointTestResult({ ok: true, message })
+    }, (error: unknown) => {
+      if (!controller.signal.aborted) {
+        setEndpointTestResult({
+          ok: false,
+          message: readableError(error, '无法连接本地服务'),
+        })
+      }
+    }).finally(() => {
+      if (endpointTestControllerRef.current === controller) {
+        endpointTestControllerRef.current = undefined
+        setEndpointTestBusy(false)
+      }
+    })
+  }
 
   return (
     <li
@@ -51,7 +171,7 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <strong style={{ fontSize: 15, lineHeight: 1.4 }}>上下文语音输入</strong>
           <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 13, lineHeight: 1.5 }}>
-            把语音实时转写到 Composer，并结合当前上下文优化识别和润色。
+            把语音转写到 Composer，并结合当前上下文优化识别和润色。
           </span>
         </span>
         <span
@@ -79,8 +199,197 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
             识别和行为开关保存在当前浏览器中；动态词汇仅用于本次录音，不会保存。
           </p>
           <label
-            htmlFor="dictate-language"
+            htmlFor="dictate-transcription-provider"
             style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
+          >
+            <span>转写方式</span>
+            <select
+              id="dictate-transcription-provider"
+              value={prefs.transcriptionProvider}
+              onChange={event => {
+                updatePrefs({
+                  transcriptionProvider: event.currentTarget.value === 'local-endpoint'
+                    ? 'local-endpoint'
+                    : 'web-speech',
+                })
+              }}
+              style={{
+                width: '100%',
+                height: 34,
+                border: '1px solid var(--dsw-alias-border-l2)',
+                borderRadius: 8,
+                padding: '0 12px',
+                background: 'var(--dsw-alias-bg-layer-3)',
+                color: 'var(--dsw-alias-label-primary)',
+                font: 'inherit',
+              }}
+            >
+              <option value="web-speech">浏览器语音识别（默认）</option>
+              <option value="local-endpoint">本地服务端点（实验性）</option>
+            </select>
+          </label>
+          {prefs.transcriptionProvider === 'local-endpoint' ? (
+            <div style={{ display: 'grid', gap: 8, marginTop: 12, maxWidth: 520 }}>
+              <label
+                htmlFor="dictate-local-endpoint"
+                style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
+              >
+                <span>本地服务地址</span>
+                <input
+                  id="dictate-local-endpoint"
+                  type="url"
+                  value={prefs.localEndpoint}
+                  onChange={event => { updatePrefs({ localEndpoint: event.currentTarget.value }) }}
+                  spellCheck={false}
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    height: 34,
+                    border: '1px solid var(--dsw-alias-border-l2)',
+                    borderRadius: 8,
+                    padding: '0 12px',
+                    background: 'var(--dsw-alias-bg-layer-3)',
+                    color: 'var(--dsw-alias-label-primary)',
+                    font: 'inherit',
+                  }}
+                />
+              </label>
+              <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+                录音结束后发送到本机 SenseVoice 服务；不会在浏览器中下载模型。首次使用可能下载接近 1 GB 的模型文件，下载与加载可能持续数十秒到数分钟。启动期间可以取消，再次启动会重新检查本地缓存。
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  disabled={endpointTestBusy || testEndpoint === undefined}
+                  onClick={runEndpointTest}
+                >
+                  {endpointTestBusy ? '正在测试连接' : '测试连接'}
+                </button>
+                {endpointTestResult !== undefined ? (
+                  <span
+                    role={endpointTestResult.ok ? 'status' : 'alert'}
+                    style={{ fontSize: 12, color: endpointTestResult.ok
+                      ? 'var(--dsw-alias-label-secondary)'
+                      : 'var(--dsw-alias-label-primary)' }}
+                  >
+                    {endpointTestResult.message}
+                  </span>
+                ) : null}
+              </div>
+              <label
+                htmlFor="dictate-local-fallback"
+                style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
+              >
+                <span>本地服务不可用时</span>
+                <select
+                  id="dictate-local-fallback"
+                  value={prefs.localFallbackPolicy}
+                  onChange={event => {
+                    const value = event.currentTarget.value
+                    updatePrefs({
+                      localFallbackPolicy: value === 'ask' || value === 'web-speech'
+                        ? value
+                        : 'local-only',
+                    })
+                  }}
+                  style={{
+                    width: '100%',
+                    height: 34,
+                    border: '1px solid var(--dsw-alias-border-l2)',
+                    borderRadius: 8,
+                    padding: '0 12px',
+                    background: 'var(--dsw-alias-bg-layer-3)',
+                    color: 'var(--dsw-alias-label-primary)',
+                    font: 'inherit',
+                  }}
+                >
+                  <option value="local-only">仅使用本地服务</option>
+                  <option value="ask">询问是否改用 Web Speech</option>
+                  <option value="web-speech">自动改用 Web Speech</option>
+                </select>
+              </label>
+              <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+                回退只发生在录音开始前的连接检查失败时；已经录制的音频转写失败后不会静默发送到其他服务。
+              </p>
+              {localService === undefined ? (
+                <p role="status" style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
+                  当前 DSH host 未提供服务管理；请手动启动本地端点。
+                </p>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 8,
+                    padding: 10,
+                    border: '1px solid var(--dsw-alias-border-l2)',
+                    borderRadius: 8,
+                  }}
+                >
+                  <span role={serviceError === '' ? 'status' : 'alert'} style={{ fontSize: 12 }}>
+                    {serviceError !== ''
+                      ? `服务状态：${serviceError}`
+                      : `服务状态：${serviceStatus?.message ?? '正在检查'}`}
+                  </span>
+                  {serviceStatus?.phase === 'starting' && serviceStatus.progressPercent !== null ? (
+                    <progress
+                      aria-label="SenseVoice 模型下载进度"
+                      max={100}
+                      value={serviceStatus.progressPercent}
+                      style={{ width: '100%' }}
+                    />
+                  ) : null}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <button
+                      type="button"
+                      disabled={serviceBusy}
+                      onClick={() => { runServiceAction(localService.status) }}
+                    >
+                      检查状态
+                    </button>
+                    {serviceStatus?.phase === 'running' ? (
+                      <button
+                        type="button"
+                        disabled={serviceBusy || !serviceStatus.managed}
+                        title={serviceStatus.managed ? '停止插件启动的本地服务' : '外部服务不能由插件停止'}
+                        onClick={() => { runServiceAction(localService.stop) }}
+                      >
+                        停止服务
+                      </button>
+                    ) : serviceStatus?.phase === 'starting' ? (
+                      <button
+                        type="button"
+                        disabled={serviceBusy || !serviceStatus.managed}
+                        onClick={() => { runServiceAction(localService.stop) }}
+                      >
+                        取消启动
+                      </button>
+                    ) : serviceStatus?.phase === 'stopping' ? (
+                      <button type="button" disabled>正在停止</button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={serviceBusy}
+                        onClick={() => { runServiceAction(localService.start) }}
+                      >
+                        {serviceStatus?.phase === 'error' ? '重新启动服务' : '启动服务'}
+                      </button>
+                    )}
+                  </div>
+                  {serviceStatus !== undefined ? (
+                    <details style={{ fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }}>
+                      <summary>诊断信息</summary>
+                      <code style={{ display: 'block', marginTop: 6, whiteSpace: 'normal' }}>
+                        {serviceDiagnostics(serviceStatus)}
+                      </code>
+                    </details>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : null}
+          <label
+            htmlFor="dictate-language"
+            style={{ display: 'grid', gap: 6, maxWidth: 360, marginTop: 14, fontSize: 13, fontWeight: 500 }}
           >
             <span>识别语言</span>
             <select
@@ -120,7 +429,9 @@ export function SettingsPanel({ modelOptions = [] }: SettingsPanelProps = {}): R
                 <span>优化中英混合识别</span>
               </label>
               <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-                根据当前 Session 和 Composer 中出现的英文词、缩写和专有名词，提高 Web Speech 识别和模型润色的准确度。词汇仅用于本次录音，不会持久化；浏览器不支持时使用普通识别。
+                {prefs.transcriptionProvider === 'web-speech'
+                  ? '根据当前 Session 和 Composer 中出现的英文词、缩写和专有名词，提高 Web Speech 识别和模型润色的准确度。词汇仅用于本次录音，不会持久化；浏览器不支持时使用普通识别。'
+                  : '根据当前 Session 和 Composer 中出现的英文词、缩写和专有名词，提高后续模型润色的准确度。SenseVoice 端点当前不接收动态词汇。'}
               </p>
             </div>
           ) : null}

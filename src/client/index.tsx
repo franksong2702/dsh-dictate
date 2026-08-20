@@ -6,6 +6,19 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { SettingsPanel, type ModelOption } from './SettingsPanel.tsx'
 import { TranscriptionDock } from './TranscriptionDock.tsx'
 import { loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
+import {
+  checkLocalEndpoint as checkLocalEndpointHealth,
+  createLocalEndpointProvider,
+} from './localEndpointProvider.ts'
+import { createWebSpeechProvider } from './webSpeechProvider.ts'
+import {
+  asrProviderError,
+  type AsrContextTerm,
+  type AsrProvider,
+  type AsrProviderError,
+  type AsrProviderSession,
+  type AsrProviderStartOptions,
+} from './asrProvider.ts'
 import { resetTranscription, updateTranscription } from './transcriptionStore.ts'
 import {
   parseContextTerms,
@@ -13,6 +26,10 @@ import {
   type ContextTermsRequest,
 } from '../terms.ts'
 import { DICTATE_SETTINGS_NAMESPACE } from '../settings-contract.ts'
+import {
+  parseLocalServiceStatus,
+  type LocalServiceStatus,
+} from '../local-service-contract.ts'
 
 interface InputActions {
   setDraft(text: string): void
@@ -31,6 +48,9 @@ interface VoiceInputProps {
     request: ContextTermsRequest,
     signal: AbortSignal,
   ) => Promise<readonly ContextTerm[]>
+  readonly checkLocalEndpoint?: (endpoint: string, signal: AbortSignal) => Promise<string>
+  /** Test seam and future host override for the two user-selectable routes. */
+  readonly providers?: Partial<Record<'web-speech' | 'local-endpoint', AsrProvider>>
 }
 
 interface PolishClientRequest {
@@ -77,19 +97,6 @@ function rightModifierCode(userAgent: string): 'MetaRight' | 'ControlRight' {
   return /\bMacintosh\b|\bMac OS X\b/i.test(userAgent) ? 'MetaRight' : 'ControlRight'
 }
 
-function applyContextTerms(
-  recognition: WebkitSpeechRecognition,
-  terms: readonly ContextTerm[],
-): void {
-  const Phrase = window.SpeechRecognitionPhrase
-  if (Phrase === undefined || recognition.phrases === undefined) return
-  try {
-    recognition.phrases = terms.map(term => new Phrase(term.text, term.boost))
-  } catch {
-    // A browser service may expose the API but reject contextual phrases; ordinary recognition remains active.
-  }
-}
-
 function contextTermsKey(
   request: ContextTermsRequest,
   composerPhase: VoiceInputProps['input']['phase'],
@@ -103,8 +110,24 @@ function contextTermsKey(
   ])
 }
 
-function VoiceInputSettings({ loadModels }: {
+const WEB_SPEECH_PROVIDER = createWebSpeechProvider()
+
+function providerErrorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'message' in error
+    && typeof (error as AsrProviderError).message === 'string') {
+    return (error as AsrProviderError).message
+  }
+  return '无法启动语音输入'
+}
+
+function VoiceInputSettings({ loadModels, testEndpoint, localService }: {
   readonly loadModels: () => Promise<readonly ModelOption[]>
+  readonly testEndpoint: (endpoint: string, signal: AbortSignal) => Promise<string>
+  readonly localService: {
+    readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly stop: (signal: AbortSignal) => Promise<LocalServiceStatus>
+  }
 }): ReactNode {
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([])
   useEffect(() => {
@@ -121,7 +144,11 @@ function VoiceInputSettings({ loadModels }: {
     })
     return () => { active = false }
   }, [loadModels])
-  return <SettingsPanel modelOptions={modelOptions} />
+  return <SettingsPanel
+    modelOptions={modelOptions}
+    testEndpoint={testEndpoint}
+    localService={localService}
+  />
 }
 
 /** Register one manual dictation button immediately before the send action. */
@@ -158,6 +185,22 @@ export function apply(ctx: ClientContext): void {
     }
     return parseContextTerms((value as { readonly terms?: unknown }).terms)
   }
+  const testEndpoint = (endpoint: string, signal: AbortSignal): Promise<string> =>
+    checkLocalEndpointHealth(endpoint, signal)
+  const callLocalService = async (
+    endpoint: 'local-service-status' | 'local-service-start' | 'local-service-stop',
+    signal: AbortSignal,
+  ): Promise<LocalServiceStatus> => {
+    const payload = endpoint === 'local-service-start' ? { origin: window.location.origin } : {}
+    const result = await connection.rpc.call('/dictate', endpoint, payload, signal)
+    if (!result.ok) throw new Error(result.error.message)
+    return parseLocalServiceStatus(result.value)
+  }
+  const localService = {
+    status: (signal: AbortSignal) => callLocalService('local-service-status', signal),
+    start: (signal: AbortSignal) => callLocalService('local-service-start', signal),
+    stop: (signal: AbortSignal) => callLocalService('local-service-stop', signal),
+  }
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',
     id: 'dictate-recorder',
@@ -166,6 +209,7 @@ export function apply(ctx: ClientContext): void {
     {...props as VoiceInputProps}
     polish={polish}
     loadContextTerms={loadContextTerms}
+    checkLocalEndpoint={testEndpoint}
   />))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock',
@@ -175,7 +219,11 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     key: DICTATE_SETTINGS_NAMESPACE,
-  }, () => <VoiceInputSettings loadModels={loadModels} />))
+  }, () => <VoiceInputSettings
+    loadModels={loadModels}
+    testEndpoint={testEndpoint}
+    localService={localService}
+  />))
 }
 
 /** Manual click-to-start, click-to-stop dictation control. */
@@ -185,15 +233,21 @@ export function VoiceInputButton({
   sessionId,
   polish,
   loadContextTerms,
+  checkLocalEndpoint,
+  providers,
 }: VoiceInputProps) {
   const [recording, setRecording] = useState(false)
+  const [preparing, setPreparing] = useState(false)
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
-  const recognitionRef = useRef<WebkitSpeechRecognition>()
+  const sessionRef = useRef<AsrProviderSession>()
+  const activeProviderRef = useRef<'web-speech' | 'local-endpoint'>()
+  const startAbortRef = useRef<AbortController>()
   const draftRef = useRef(input.draft)
   const actionsRef = useRef(inputActions)
   const failedRef = useRef(false)
   const finalizingRef = useRef(false)
   const messageTimerRef = useRef<number>()
+  const permissionStatusTimerRef = useRef<number>()
   const polishAbortRef = useRef<AbortController>()
   const contextTermsRef = useRef<readonly ContextTerm[]>([])
   const contextTermsKeyRef = useRef<string>()
@@ -203,14 +257,21 @@ export function VoiceInputButton({
     readonly controller: AbortController
     readonly promise: Promise<readonly ContextTerm[]>
   }>()
-  const retryWithoutPhraseBiasRef = useRef(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const toggleRef = useRef<() => void>(() => {})
   draftRef.current = input.draft
   actionsRef.current = inputActions
 
-  const supported = typeof window !== 'undefined'
-    && (window.SpeechRecognition !== undefined || window.webkitSpeechRecognition !== undefined)
+  const injectedProvider = providers?.[prefs.transcriptionProvider]
+  const supported = sessionRef.current !== undefined || startAbortRef.current !== undefined
+    || injectedProvider !== undefined || (prefs.transcriptionProvider === 'web-speech'
+    ? typeof window !== 'undefined'
+      && (window.SpeechRecognition !== undefined || window.webkitSpeechRecognition !== undefined)
+    : typeof window !== 'undefined'
+      && navigator.mediaDevices?.getUserMedia !== undefined
+      && (window.AudioContext !== undefined
+        || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext !== undefined)
+      && typeof window.fetch === 'function')
   const contextOptimizationEnabled = prefs.mixedLanguageOptimizationEnabled && prefs.lang.startsWith('zh-')
   const selectedModel = prefs.modelPolishEnabled ? decodeModelReference(prefs.selectedModel) : undefined
   const contextTermsRequest: ContextTermsRequest = {
@@ -262,13 +323,22 @@ export function VoiceInputButton({
     messageTimerRef.current = undefined
   }
 
-  const showTransientMessage = (text: string, error = false): void => {
+  const clearPermissionStatusTimer = (): void => {
+    if (permissionStatusTimerRef.current === undefined) return
+    window.clearTimeout(permissionStatusTimerRef.current)
+    permissionStatusTimerRef.current = undefined
+  }
+
+  const showTransientMessage = (title: string, detail: string, error = false): void => {
     clearMessageTimer()
+    clearPermissionStatusTimer()
     updateTranscription(sessionId, {
       phase: error ? 'error' : 'complete',
       finalText: '',
       interimText: '',
-      status: text,
+      status: title,
+      hint: detail,
+      action: null,
     })
     messageTimerRef.current = window.setTimeout(() => {
       resetTranscription(sessionId)
@@ -278,23 +348,19 @@ export function VoiceInputButton({
 
   useEffect(() => () => {
     clearMessageTimer()
+    clearPermissionStatusTimer()
     clearTermsDebounce()
-    const recognition = recognitionRef.current
-    if (recognition !== undefined) {
-      recognition.onstart = null
-      recognition.onresult = null
-      recognition.onerror = null
-      recognition.onend = null
-      recognition.abort()
-    }
-    recognitionRef.current = undefined
+    startAbortRef.current?.abort()
+    startAbortRef.current = undefined
+    void sessionRef.current?.abort()
+    sessionRef.current = undefined
+    activeProviderRef.current = undefined
     polishAbortRef.current?.abort()
     polishAbortRef.current = undefined
     termsRequestRef.current?.controller.abort()
     termsRequestRef.current = undefined
     contextTermsRef.current = []
     contextTermsKeyRef.current = undefined
-    retryWithoutPhraseBiasRef.current = false
     finalizingRef.current = false
     resetTranscription(sessionId)
   }, [sessionId])
@@ -362,14 +428,18 @@ export function VoiceInputButton({
     const selected = selectedModel
     if (!prefs.modelPolishEnabled || polish === undefined || selected === undefined) {
       insertTranscript(transcript, allowAutomaticSend)
-      showTransientMessage(allowAutomaticSend
-        ? prefs.modelPolishEnabled && selected === undefined
-          ? '未选择润色模型，原始转写已交给 DSH 发送'
-          : '转写结果已交给 DSH 发送'
-        : prefs.modelPolishEnabled && selected === undefined
-          ? '请选择润色模型'
-          : '语音已转入输入框，请检查后发送',
-      prefs.modelPolishEnabled && selected === undefined)
+      const polishUnavailable = prefs.modelPolishEnabled && selected === undefined
+      showTransientMessage(
+        polishUnavailable ? '润色未完成' : '已转写完成',
+        allowAutomaticSend
+          ? polishUnavailable
+            ? '未选择润色模型，原始转写已直接发送'
+            : '转写结果已直接发送'
+          : polishUnavailable
+            ? '请选择润色模型；原始转写已写入输入框'
+            : '转写结果已写入输入框，请检查后发送',
+        polishUnavailable,
+      )
       return
     }
     clearMessageTimer()
@@ -377,7 +447,8 @@ export function VoiceInputButton({
       phase: 'polishing',
       finalText: transcript,
       interimText: '',
-      status: '模型润色中',
+      status: '正在润色中',
+      hint: allowAutomaticSend ? '润色后将直接发送' : '润色后将写入输入框',
     })
     const controller = new AbortController()
     polishAbortRef.current?.abort()
@@ -392,36 +463,62 @@ export function VoiceInputButton({
       }, controller.signal)
       if (controller.signal.aborted) return
       insertTranscript(text, allowAutomaticSend)
-      showTransientMessage(allowAutomaticSend
-        ? '润色结果已交给 DSH 发送'
-        : '语音已转入输入框，请检查后发送')
+      showTransientMessage(
+        '已润色完成',
+        allowAutomaticSend ? '最终结果已直接发送' : '最终结果已写入输入框',
+      )
     } catch {
       if (controller.signal.aborted) return
       insertTranscript(transcript, allowAutomaticSend)
-      showTransientMessage(allowAutomaticSend
-        ? '模型润色失败，原始转写已交给 DSH 发送'
-        : '模型润色失败，已保留原始转写', true)
+      showTransientMessage(
+        '润色未完成',
+        allowAutomaticSend ? '原始转写已直接发送' : '原始转写已写入输入框',
+        true,
+      )
     } finally {
       if (polishAbortRef.current === controller) polishAbortRef.current = undefined
     }
   }
 
   const toggle = (): void => {
-    if (recognitionRef.current !== undefined) {
+    const activeSession = sessionRef.current
+    if (activeSession !== undefined) {
+      if (finalizingRef.current) {
+        void activeSession.abort()
+        return
+      }
       finalizingRef.current = true
+      setRecording(false)
+      const localMode = activeProviderRef.current === 'local-endpoint'
+      setPreparing(localMode)
       updateTranscription(sessionId, {
         phase: 'finalizing',
-        status: '正在确认文字',
+        status: localMode ? '正在转写中' : '正在确认中',
+        hint: localMode ? '正在保留结尾语音，避免截断最后一句…' : '正在确认识别结果，请稍候…',
+        action: null,
       })
-      recognitionRef.current.stop()
+      void activeSession.stop()
+      return
+    }
+    if (startAbortRef.current !== undefined) {
+      clearPermissionStatusTimer()
+      startAbortRef.current.abort()
+      startAbortRef.current = undefined
+      activeProviderRef.current = undefined
+      setPreparing(false)
+      resetTranscription(sessionId)
       return
     }
     if (!supported) {
-      showTransientMessage('当前浏览器不支持语音识别，请使用 Chrome 或 Edge', true)
+      showTransientMessage(
+        '转写未完成',
+        prefs.transcriptionProvider === 'web-speech'
+          ? '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'
+          : '当前浏览器不支持本地录音，请使用最新版 Chrome 或 Edge',
+        true,
+      )
       return
     }
-    const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition
-    if (Recognition === undefined) return
 
     clearTermsDebounce()
     polishAbortRef.current?.abort()
@@ -440,96 +537,248 @@ export function VoiceInputButton({
       termsRequestRef.current = undefined
     }
     if (cachedTerms === undefined) contextTermsRef.current = []
-    const skipPhraseBias = retryWithoutPhraseBiasRef.current
-    retryWithoutPhraseBiasRef.current = false
+
+    let providerId = prefs.transcriptionProvider
+    let localMode = providerId === 'local-endpoint'
+    let provider = injectedProvider ?? (providerId === 'web-speech'
+      ? WEB_SPEECH_PROVIDER
+      : createLocalEndpointProvider({ endpoint: prefs.localEndpoint }))
+    const controller = new AbortController()
+    startAbortRef.current = controller
     finalizingRef.current = false
-    let finalText = ''
-    const recognition = new Recognition()
-    recognition.lang = prefs.lang
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.maxAlternatives = 1
-    const canBiasRecognition = contextOptimizationEnabled && !skipPhraseBias
-      && window.SpeechRecognitionPhrase !== undefined
-      && recognition.phrases !== undefined
-    if (canBiasRecognition && cachedTerms !== undefined && cachedTerms.length > 0) {
-      applyContextTerms(recognition, cachedTerms)
-    }
-    recognition.onstart = () => {
+    failedRef.current = false
+    let ended = false
+    let fallbackNotice = false
+    const finalSegments: string[] = []
+    const currentFinalText = (): string => joinRecognitionSegments(finalSegments, prefs.lang)
+
+    activeProviderRef.current = providerId
+    if (localMode) {
+      setPreparing(true)
       clearMessageTimer()
-      failedRef.current = false
-      setRecording(true)
-      updateTranscription(sessionId, {
-        phase: finalizingRef.current ? 'finalizing' : 'listening',
-        finalText: '',
-        interimText: '',
-        status: '正在听写',
-      })
+      clearPermissionStatusTimer()
+      resetTranscription(sessionId)
     }
-    recognition.onresult = event => {
-      const finalSegments: string[] = []
-      const interimSegments: string[] = []
-      for (let index = 0; index < event.results.length; index += 1) {
-        const result = event.results[index]
-        if (result === undefined) continue
-        const text = result[0]?.transcript ?? ''
-        if (result.isFinal) finalSegments.push(text)
-        else interimSegments.push(text)
-      }
-      finalText = joinRecognitionSegments(finalSegments, prefs.lang)
-      const finalizing = finalizingRef.current
-      updateTranscription(sessionId, {
-        phase: finalizing ? 'finalizing' : 'listening',
-        finalText,
-        interimText: joinRecognitionSegments(interimSegments, prefs.lang),
-        status: finalizing ? '正在确认文字' : '正在听写',
-      })
+
+    const prepareForLocalMicrophone = (): void => {
+      if (!localMode) return
+      permissionStatusTimerRef.current = window.setTimeout(() => {
+        permissionStatusTimerRef.current = undefined
+        if (startAbortRef.current !== controller) return
+        updateTranscription(sessionId, {
+          phase: 'preparing',
+          finalText: '',
+          interimText: '',
+          status: '等待授权中',
+          hint: '请按浏览器提示允许麦克风访问…',
+          action: null,
+        })
+      }, 2000)
     }
-    recognition.onerror = event => {
-      if (event.error === 'aborted' || event.error === 'no-speech') return
-      if (event.error === 'phrases-not-supported') {
-        if (!skipPhraseBias) retryWithoutPhraseBiasRef.current = true
-        else {
-          failedRef.current = true
-          showTransientMessage('当前语音识别服务不可用，请稍后重试', true)
+
+    const startOptions: AsrProviderStartOptions = {
+      lang: prefs.lang,
+      terms: (cachedTerms ?? []) as readonly AsrContextTerm[],
+      signal: controller.signal,
+      onStart: () => {
+        clearMessageTimer()
+        clearPermissionStatusTimer()
+        setPreparing(false)
+        setRecording(true)
+        updateTranscription(sessionId, {
+          phase: 'listening',
+          finalText: '',
+          interimText: '',
+          status: localMode ? '正在录音中' : '正在听写中',
+          hint: localMode
+            ? '再次点击麦克风结束并转写'
+            : fallbackNotice
+              ? '本地服务不可用，已按设置改用 Web Speech；请开始说话…'
+              : '请开始说话…',
+          action: null,
+        })
+      },
+      onInterim: (text) => {
+        updateTranscription(sessionId, {
+          phase: finalizingRef.current ? 'finalizing' : 'listening',
+          finalText: currentFinalText(),
+          interimText: text,
+          status: finalizingRef.current ? '正在确认中' : '正在听写中',
+        })
+      },
+      onFinal: (text) => {
+        if (text.trim() !== '') finalSegments.push(text)
+        updateTranscription(sessionId, {
+          phase: finalizingRef.current ? 'finalizing' : 'listening',
+          finalText: currentFinalText(),
+          interimText: '',
+          status: finalizingRef.current
+            ? localMode ? '正在转写中' : '正在确认中'
+            : localMode ? '正在录音中' : '正在听写中',
+        })
+      },
+      onStatus: (status) => {
+        if (status !== 'stopping') return
+        setRecording(false)
+        setPreparing(localMode)
+        updateTranscription(sessionId, {
+          phase: 'finalizing',
+          status: localMode ? '正在转写中' : '正在确认中',
+          hint: localMode ? '正在保留结尾语音，避免截断最后一句…' : '正在确认识别结果，请稍候…',
+          action: null,
+        })
+      },
+      onProgress: (progress) => {
+        if (progress.message === undefined) return
+        if (progress.phase === 'microphone') return
+        if (progress.phase === 'voice') {
+          if (!localMode || finalizingRef.current) return
+          updateTranscription(sessionId, {
+            phase: 'listening',
+            status: '正在录音中',
+            hint: '已检测到语音；再次点击麦克风结束并转写',
+            action: null,
+          })
+          return
         }
+        clearPermissionStatusTimer()
+        updateTranscription(sessionId, {
+          phase: 'finalizing',
+          status: '正在转写中',
+          hint: progress.phase === 'audio'
+            ? progress.message.includes('保留')
+              ? '正在保留结尾语音，避免截断最后一句…'
+              : '录音已结束，正在准备音频…'
+            : '本地服务正在识别语音，请稍候…',
+          action: null,
+        })
+      },
+      onError: (error) => {
+        clearPermissionStatusTimer()
+        failedRef.current = true
+        showTransientMessage('转写未完成', error.message, true)
+      },
+      onEnd: (reason) => {
+        clearPermissionStatusTimer()
+        ended = true
+        sessionRef.current = undefined
+        activeProviderRef.current = undefined
+        startAbortRef.current = undefined
+        setRecording(false)
+        setPreparing(false)
+        const allowAutomaticSend = reason === 'stop' && finalizingRef.current && prefs.autoSendEnabled
+        finalizingRef.current = false
+        const transcript = currentFinalText().trim()
+        if (transcript !== '') {
+          void finishTranscript(transcript, allowAutomaticSend)
+        } else if (!failedRef.current && reason !== 'abort') {
+          showTransientMessage('转写未完成', '没有识别到语音，请重试')
+        } else if (reason === 'abort' && !failedRef.current) {
+          resetTranscription(sessionId)
+        }
+      },
+    }
+    const acceptSession = (session: AsrProviderSession): void => {
+      if (ended || controller.signal.aborted) {
+        void session.abort()
         return
       }
-      failedRef.current = true
-      showTransientMessage(event.error === 'not-allowed'
-        ? '麦克风权限被拒绝，请在浏览器地址栏允许后重试'
-        : `语音识别失败：${event.error}`, true)
-    }
-    recognition.onend = () => {
-      recognitionRef.current = undefined
-      setRecording(false)
-      const allowAutomaticSend = finalizingRef.current && prefs.autoSendEnabled
-      finalizingRef.current = false
-      const transcript = finalText.trim()
-      if (retryWithoutPhraseBiasRef.current && transcript === '') {
-        toggle()
-        return
-      }
-      if (transcript !== '') {
-        void finishTranscript(transcript, allowAutomaticSend)
-      } else if (!failedRef.current) {
-        showTransientMessage('没有识别到语音')
-      }
-    }
-    recognitionRef.current = recognition
-    try {
-      recognition.start()
+      sessionRef.current = session
+      startAbortRef.current = undefined
       if (shouldLoadContextTerms) {
         void requestContextTermsRef.current(termsRequestAtStart, termsKeyAtStart).then((terms) => {
-          if (recognitionRef.current !== recognition) return
-          if (canBiasRecognition && terms.length > 0) applyContextTerms(recognition, terms)
+          if (sessionRef.current === session) void session.updateTerms(terms)
         }, () => {
-          // Context-term extraction is optional; ordinary recognition remains active.
+          // Context-term extraction is optional; recognition and polishing retain their fallbacks.
         })
       }
-    } catch {
-      recognitionRef.current = undefined
-      showTransientMessage('无法启动麦克风', true)
+    }
+    const rejectSession = (error: unknown): void => {
+      clearPermissionStatusTimer()
+      startAbortRef.current = undefined
+      activeProviderRef.current = undefined
+      setRecording(false)
+      setPreparing(false)
+      if (controller.signal.aborted) {
+        resetTranscription(sessionId)
+        return
+      }
+      if (!failedRef.current) showTransientMessage('转写未完成', providerErrorMessage(error), true)
+    }
+
+    const beginProvider = (): void => {
+      try {
+        const started = provider.start(startOptions)
+        const pending = started as Partial<Promise<AsrProviderSession>>
+        if (typeof pending.then === 'function') {
+          void (started as Promise<AsrProviderSession>).then(acceptSession, rejectSession)
+        } else {
+          acceptSession(started as AsrProviderSession)
+        }
+      } catch (error) {
+        rejectSession(error)
+      }
+    }
+
+    const webSpeechAvailable = providers?.['web-speech'] !== undefined
+      || (typeof window !== 'undefined'
+        && (window.SpeechRecognition !== undefined || window.webkitSpeechRecognition !== undefined))
+    const fallbackToWebSpeech = (): void => {
+      if (controller.signal.aborted || startAbortRef.current !== controller) return
+      if (!webSpeechAvailable) {
+        rejectSession(asrProviderError(
+          'unsupported',
+          '本地服务不可用，且当前浏览器不支持 Web Speech 回退',
+        ))
+        return
+      }
+      clearMessageTimer()
+      clearPermissionStatusTimer()
+      resetTranscription(sessionId)
+      setPreparing(false)
+      providerId = 'web-speech'
+      localMode = false
+      fallbackNotice = true
+      provider = providers?.['web-speech'] ?? WEB_SPEECH_PROVIDER
+      activeProviderRef.current = providerId
+      beginProvider()
+    }
+    const handlePreflightFailure = (error: unknown): void => {
+      if (controller.signal.aborted) {
+        rejectSession(error)
+        return
+      }
+      clearPermissionStatusTimer()
+      setPreparing(false)
+      const detail = providerErrorMessage(error)
+      if (prefs.localFallbackPolicy === 'web-speech') {
+        fallbackToWebSpeech()
+        return
+      }
+      if (prefs.localFallbackPolicy === 'ask' && webSpeechAvailable) {
+        clearMessageTimer()
+        updateTranscription(sessionId, {
+          phase: 'error',
+          finalText: '',
+          interimText: '',
+          status: '转写未完成',
+          hint: `${detail}。是否改用 Web Speech？`,
+          action: { label: '改用 Web Speech', run: fallbackToWebSpeech },
+        })
+        return
+      }
+      rejectSession(error)
+    }
+
+    if (localMode && checkLocalEndpoint !== undefined) {
+      void checkLocalEndpoint(prefs.localEndpoint, controller.signal).then(() => {
+        if (controller.signal.aborted || startAbortRef.current !== controller) return
+        prepareForLocalMicrophone()
+        beginProvider()
+      }, handlePreflightFailure)
+    } else {
+      prepareForLocalMicrophone()
+      beginProvider()
     }
   }
   toggleRef.current = toggle
@@ -587,10 +836,16 @@ export function VoiceInputButton({
         ref={buttonRef}
         type="button"
         aria-label="语音输入"
-        aria-pressed={recording}
+        aria-pressed={recording || preparing}
         title={supported
-          ? recording ? '点击结束并转写' : '点击开始录音'
-          : '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'}
+          ? (activeProviderRef.current ?? prefs.transcriptionProvider) === 'local-endpoint'
+            ? preparing
+              ? finalizingRef.current ? '点击取消本地转写' : '点击取消本地录音准备'
+              : recording ? '点击结束并转写' : '点击开始本地录音'
+            : recording ? '点击结束并转写' : '点击开始录音'
+          : prefs.transcriptionProvider === 'web-speech'
+            ? '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'
+            : '当前浏览器不支持本地录音，请使用最新版 Chrome 或 Edge'}
         onClick={toggle}
         style={{
           width: 28,
@@ -601,8 +856,8 @@ export function VoiceInputButton({
           border: 0,
           borderRadius: 6,
           cursor: 'pointer',
-          background: recording ? '#e5484d' : 'transparent',
-          color: recording ? '#fff' : 'currentColor',
+          background: recording || preparing ? '#e5484d' : 'transparent',
+          color: recording || preparing ? '#fff' : 'currentColor',
         }}
       >
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">

@@ -12,12 +12,14 @@ export interface TranscriptionDockProps {
 
 function phaseTitle(snapshot: TranscriptionSnapshot): string {
   switch (snapshot.phase) {
-    case 'listening': return '正在听写'
-    case 'finalizing': return '正在确认文字'
-    case 'polishing': return '模型润色中'
-    case 'complete':
-    case 'error':
-      return snapshot.status
+    case 'preparing': return '等待授权中'
+    case 'listening': return snapshot.status.includes('录音') ? '正在录音中' : '正在听写中'
+    case 'finalizing':
+      if (snapshot.status.includes('转写')) return '正在转写中'
+      return '正在确认中'
+    case 'polishing': return '正在润色中'
+    case 'complete': return snapshot.status.includes('润色') ? '已润色完成' : '已转写完成'
+    case 'error': return snapshot.status.includes('润色') ? '润色未完成' : '转写未完成'
     case 'idle':
       return ''
     default: {
@@ -28,9 +30,23 @@ function phaseTitle(snapshot: TranscriptionSnapshot): string {
 }
 
 function textPreview(snapshot: TranscriptionSnapshot): ReactNode {
-  if (snapshot.phase === 'listening' || snapshot.phase === 'finalizing') {
+  if (snapshot.phase === 'polishing') {
+    return (
+      <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>
+        <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>初步识别（非最终）：</span>
+        {snapshot.finalText !== '' ? (
+          <span data-transcription-provisional>{snapshot.finalText}</span>
+        ) : null}
+        {snapshot.hint !== '' ? (
+          <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>· {snapshot.hint}</span>
+        ) : null}
+      </span>
+    )
+  }
+  if (snapshot.phase === 'preparing' || snapshot.phase === 'listening' || snapshot.phase === 'finalizing') {
     if (snapshot.finalText === '' && snapshot.interimText === '') {
-      return <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>请开始说话…</span>
+      if (snapshot.hint === '') return null
+      return <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>{snapshot.hint}</span>
     }
     return (
       <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>
@@ -43,8 +59,9 @@ function textPreview(snapshot: TranscriptionSnapshot): ReactNode {
       </span>
     )
   }
-  if (snapshot.finalText === '') return null
-  return <span data-transcription-final>{snapshot.finalText}</span>
+  if (snapshot.finalText !== '') return <span data-transcription-final>{snapshot.finalText}</span>
+  if (snapshot.hint === '') return null
+  return <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>{snapshot.hint}</span>
 }
 
 /** Render one session's live transcript above the host composer. */
@@ -83,8 +100,17 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
         lineHeight: 1.5,
       }}
     >
-      <strong style={{ flex: 'none', fontWeight: 600 }}>{title}</strong>
-      <span style={{ minWidth: 0 }}>{textPreview(snapshot)}</span>
+      <strong data-transcription-title style={{ flex: 'none', fontWeight: 600 }}>{title}</strong>
+      <span data-transcription-auxiliary style={{ minWidth: 0 }}>{textPreview(snapshot)}</span>
+      {snapshot.action !== null ? (
+        <button
+          type="button"
+          onClick={snapshot.action.run}
+          style={{ marginLeft: 'auto', flex: 'none' }}
+        >
+          {snapshot.action.label}
+        </button>
+      ) : null}
     </div>
   )
 }

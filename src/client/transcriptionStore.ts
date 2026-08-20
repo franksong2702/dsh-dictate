@@ -1,11 +1,18 @@
 /** Lifecycle phases exposed by the live transcription surface. */
 export type TranscriptionPhase =
   | 'idle'
+  | 'preparing'
   | 'listening'
   | 'finalizing'
   | 'polishing'
   | 'complete'
   | 'error'
+
+/** One explicit user choice attached to a transient Composer status. */
+export interface TranscriptionAction {
+  readonly label: string
+  readonly run: () => void
+}
 
 /** Read-only state rendered for one session's transcription dock. */
 export interface TranscriptionSnapshot {
@@ -13,6 +20,8 @@ export interface TranscriptionSnapshot {
   readonly finalText: string
   readonly interimText: string
   readonly status: string
+  readonly hint: string
+  readonly action: TranscriptionAction | null
 }
 
 /** Stable empty state shared by sessions that have not started transcribing. */
@@ -21,6 +30,8 @@ export const EMPTY_TRANSCRIPTION: TranscriptionSnapshot = Object.freeze({
   finalText: '',
   interimText: '',
   status: '',
+  hint: '',
+  action: null,
 })
 
 interface TranscriptionEntry {
@@ -85,9 +96,12 @@ export function updateTranscription(
     finalText: patch.finalText ?? previous.finalText,
     interimText: patch.interimText ?? previous.interimText,
     status: patch.status ?? previous.status,
+    hint: patch.hint ?? previous.hint,
+    action: 'action' in patch ? patch.action ?? null : previous.action,
   }
   if (next.phase === previous.phase && next.finalText === previous.finalText
-    && next.interimText === previous.interimText && next.status === previous.status) {
+    && next.interimText === previous.interimText && next.status === previous.status
+    && next.hint === previous.hint && next.action === previous.action) {
     return previous
   }
   entry.snapshot = next
