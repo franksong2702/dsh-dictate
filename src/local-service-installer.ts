@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { LocalServiceInstallStatus } from './local-service-contract.ts'
 
 const MODEL_FILENAME = 'SenseVoiceSmall-Q8_0.gguf'
@@ -18,6 +19,9 @@ const MODEL_SIZE = 252_684_608
 const MODEL_SHA256 = '6c759ee4c9748c9b3f7a5a60ca74f0f7e685fb9d45d1378fce7cfd62f59adf29'
 const MODEL_URL = 'https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/4a08b8e900b38a977e32eb08d5d0697d6e72ba04/SenseVoiceSmall-Q8_0.gguf'
 const RUNTIME_FILENAME = 'dsh-dictate-asr'
+const RUNTIME_SIZE = 4_578_176
+const RUNTIME_SHA256 = '3807d45cb7ec47e5f8ce73698319861d6be04c09a90d30848abcefad80426e6a'
+const BUNDLED_RUNTIME_SOURCE = fileURLToPath(new URL('../native/darwin-arm64/dsh-dictate-asr', import.meta.url))
 const MANIFEST_FILENAME = 'install.json'
 const COPY_CHUNK_BYTES = 1024 * 1024
 
@@ -26,6 +30,9 @@ export interface InstallerArtifacts {
   readonly modelSize: number
   readonly modelSha256: string
   readonly modelUrl: string
+  readonly bundledRuntimeSource?: string
+  readonly runtimeSize?: number
+  readonly runtimeSha256?: string
 }
 
 const DEFAULT_ARTIFACTS: InstallerArtifacts = {
@@ -33,6 +40,9 @@ const DEFAULT_ARTIFACTS: InstallerArtifacts = {
   modelSize: MODEL_SIZE,
   modelSha256: MODEL_SHA256,
   modelUrl: MODEL_URL,
+  bundledRuntimeSource: BUNDLED_RUNTIME_SOURCE,
+  runtimeSize: RUNTIME_SIZE,
+  runtimeSha256: RUNTIME_SHA256,
 }
 
 export interface LocalServiceInstallerRuntime {
@@ -76,7 +86,7 @@ export class LocalServiceInstaller {
   private readonly runtime: LocalServiceInstallerRuntime
   private readonly artifacts: InstallerArtifacts
   private readonly manifestPath: string
-  private readonly sourceConfigured: boolean
+  readonly available: boolean
   private phase: LocalServiceInstallStatus['phase']
   private stage: LocalServiceInstallStatus['stage'] = 'idle'
   private message: string
@@ -93,24 +103,22 @@ export class LocalServiceInstaller {
   ) {
     this.runtime = runtime
     this.artifacts = artifacts
-    this.sourceConfigured = Boolean(runtime.env.DSH_DICTATE_NATIVE_RUNTIME_SOURCE?.trim())
     const dshHome = resolve(runtime.env.DSH_HOME?.trim() || join(homedir(), '.dsh'))
     this.installRoot = join(dshHome, 'runtimes', 'dsh-dictate', 'local-asr')
     this.executablePath = join(this.installRoot, 'runtime', RUNTIME_FILENAME)
     this.modelPath = join(this.installRoot, 'models', artifacts.modelFilename)
     this.manifestPath = join(this.installRoot, MANIFEST_FILENAME)
     const supported = runtime.platform === 'darwin' && runtime.arch === 'arm64'
+    this.available = supported
     this.phase = supported ? 'not-installed' : 'unsupported'
     this.message = supported
-      ? this.sourceConfigured
-        ? '尚未安装本地 ASR 环境'
-        : '未配置内部测试安装源；可使用外部 funasr-server'
+      ? '尚未安装本地 ASR 环境'
       : `当前版本暂不支持 ${runtime.platform}-${runtime.arch}`
   }
 
   private snapshot(): LocalServiceInstallStatus {
     return {
-      available: this.sourceConfigured,
+      available: this.available,
       phase: this.phase,
       stage: this.stage,
       message: this.message,
@@ -141,7 +149,7 @@ export class LocalServiceInstaller {
   }
 
   start(onInstalled: (signal: AbortSignal) => Promise<void>): Promise<LocalServiceInstallStatus> {
-    if (this.phase === 'unsupported' || !this.sourceConfigured || this.task !== undefined) {
+    if (this.phase === 'unsupported' || !this.available || this.task !== undefined) {
       return Promise.resolve(this.snapshot())
     }
     const controller = new AbortController()
@@ -208,9 +216,10 @@ export class LocalServiceInstaller {
   }
 
   private async install(signal: AbortSignal): Promise<void> {
-    const runtimeSource = this.runtime.env.DSH_DICTATE_NATIVE_RUNTIME_SOURCE?.trim()
+    const configuredRuntimeSource = this.runtime.env.DSH_DICTATE_NATIVE_RUNTIME_SOURCE?.trim()
+    const runtimeSource = configuredRuntimeSource || this.artifacts.bundledRuntimeSource
     if (runtimeSource === undefined || runtimeSource === '' || !isAbsolute(runtimeSource)) {
-      throw new Error('当前测试构建未配置原生 ASR 安装源')
+      throw new Error('当前发行包缺少原生 ASR 运行程序，请重新安装插件')
     }
     const runtimeSize = (await stat(runtimeSource)).size
     this.totalBytes = runtimeSize + this.artifacts.modelSize
@@ -226,6 +235,11 @@ export class LocalServiceInstaller {
       '正在安装原生 ASR 运行程序',
       signal,
     )
+    if (configuredRuntimeSource === undefined || configuredRuntimeSource === '') {
+      if (runtimeSize !== this.artifacts.runtimeSize || runtimeSha256 !== this.artifacts.runtimeSha256) {
+        throw new Error('原生 ASR 运行程序完整性校验失败，请重新安装插件')
+      }
+    }
     await chmod(runtimePartial, 0o755)
     await rename(runtimePartial, this.executablePath)
 

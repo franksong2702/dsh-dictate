@@ -56,14 +56,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_CONFIG): void {
     readonly sessions: SessionStore
   }
   const installer = new LocalServiceInstaller()
-  const nativeRuntimeSource = process.env.DSH_DICTATE_NATIVE_RUNTIME_SOURCE?.trim()
-  const localService = new LocalServiceController(undefined, nativeRuntimeSource === undefined || nativeRuntimeSource === ''
-    ? {}
-    : {
+  const localService = new LocalServiceController(undefined, installer.available
+    ? {
         executable: installer.executablePath,
         workingDirectory: installer.installRoot,
         modelPath: installer.modelPath,
-      })
+      }
+    : {})
   const autoStart = new LocalServiceAutoStartManager(localService)
   let currentConfig = (): Config => config
   let stopped = false

@@ -491,8 +491,8 @@ export function SettingsPanel({
                       </div>
                       <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
                         {installStatus?.available === false
-                          ? '当前发行包未配置公开原生安装源；请在 DSH host 中准备 funasr-server，或使用内部测试构建。'
-                          : '当前为 macOS arm64 内部测试安装源；安装目录与系统 Python 完全隔离。'}
+                          ? `当前版本暂不支持 ${installStatus.platform} 一键安装；仍可连接自行管理的回环端点。`
+                          : 'Apple Silicon 原生运行程序随插件提供；安装时仅下载并校验约 253 MB 的 SenseVoice Q8 模型，不修改系统 Python 或 PATH。'}
                       </p>
                     </div>
                   ) : null}

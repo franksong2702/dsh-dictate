@@ -1,0 +1,38 @@
+name: Native local ASR runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "native/**"
+      - "src/local-service-installer.ts"
+      - "scripts/verify-package.mjs"
+      - ".github/workflows/native-runtime.yml"
+  pull_request:
+    paths:
+      - "native/**"
+      - "src/local-service-installer.ts"
+      - "scripts/verify-package.mjs"
+      - ".github/workflows/native-runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check Rust formatting
+        run: cargo fmt --check --manifest-path native/local-asr/Cargo.toml
+      - name: Build pinned native runtime source
+        run: cargo build --release --locked --manifest-path native/local-asr/Cargo.toml
+      - name: Verify bundled Apple Silicon runtime
+        run: |
+          file native/darwin-arm64/dsh-dictate-asr | grep -q 'Mach-O 64-bit executable arm64'
+          test -x native/darwin-arm64/dsh-dictate-asr
+          codesign --verify --strict native/darwin-arm64/dsh-dictate-asr

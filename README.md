@@ -14,7 +14,14 @@
 dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 ```
 
-安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。Web Speech 保持默认；本地 SenseVoice 是需要单独准备本机运行环境的可选增强模式。
+安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。Web Speech 保持默认；Apple Silicon Mac 用户选择本地端点后，可以直接点击“安装并准备本地 ASR”，无需安装 Python、配置 PATH 或手动启动端口。
+
+## `v0.4.0-alpha.5` 待发布
+
+- Apple Silicon 原生 ASR 运行程序随插件发行包提供，不再要求公开用户配置内部安装源。
+- 设置页可从空白状态完成运行程序校验、SenseVoice Q8 模型下载、断点续传、完整性校验、服务启动和首次模型加载。
+- 原生运行程序源码、固定依赖和第三方许可证说明进入仓库；打包校验会拒绝缺失或摘要不匹配的运行程序。
+- macOS Intel、Windows 和 Linux 继续明确显示为暂不支持一键安装，不影响 Web Speech 或自行管理的回环端点。
 
 ## `v0.4.0-alpha.4` 新增
 
@@ -87,9 +94,11 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 
 ### 启动本地 SenseVoice 端点
 
-安装支持 `funasr-server` 的 FunASR 环境后，可以从插件设置页启动、停止并检查服务状态。当前 alpha4 的 macOS arm64 安装器仍是内部测试入口；公开用户需要自行准备 `funasr-server`，或使用带有内部安装源的测试环境。SenseVoice Q8 模型约 253 MB，首次使用可能需要下载并加载到内存，实际耗时取决于网络、磁盘和 CPU。设置页会如实区分检查运行环境、启动进程、模型校验、下载模型、加载模型、检查服务和已就绪等阶段，并提供取消、重试和诊断摘要。
+在 Apple Silicon Mac 上，可以从插件设置页完成本地 ASR 的安装、启动、停止和状态检查。约 4.4 MB 的原生运行程序随插件发行包提供；首次安装只需下载约 253 MB 的 SenseVoice Q8 模型。运行程序和模型都会经过 SHA-256 校验并安装到当前 `DSH_HOME`，不会修改系统 Python、PATH 或全局软件包。实际下载和首次加载时间取决于网络、磁盘和 CPU。设置页会如实区分准备运行程序、下载模型、完整性校验、加载模型、检查服务和已就绪等阶段，并提供取消、重试和诊断摘要。
 
-取消启动会终止插件管理的服务进程；再次启动时会重新校验本地缓存，并在可验证的情况下复用完整残片。DSH host 必须能在 `PATH` 中找到 `funasr-server`，也可以用服务端环境变量明确指定路径和工作目录：
+取消安装会终止插件管理的服务进程；再次安装时会重新校验本地缓存，并在可验证的情况下复用完整下载残片。安装完成后可以显式开启“随 DSH 自动启动”，后续启动会直接加载已经校验的本地模型。
+
+macOS Intel、Windows 和 Linux 当前还没有随包提供原生运行程序；这些平台仍可连接自行管理的回环端点。开发和兼容测试也可以通过以下环境变量明确指定外部 `funasr-server` 或原生测试程序：
 
 ```sh
 export DSH_DICTATE_FUNASR_SERVER=/absolute/path/to/funasr-server
@@ -99,6 +108,8 @@ export DSH_DICTATE_FUNASR_WORKDIR=/absolute/path/to/model-workspace
 插件启动的进程固定绑定 `127.0.0.1:39081`，固定使用 CPU 和 SenseVoice，并只允许当前回环 DSH origin 跨域访问。设置页中的启动、停止和服务状态只管理这个固定地址；如果填写其他回环端点，需要在插件外部自行管理该服务，但仍可使用“测试连接”和转写功能。浏览器不能向 RPC 传递命令、可执行路径或额外进程参数。
 
 “随 DSH 自动启动本地服务”默认关闭。开启后，选项与当前 DSH origin 会保存到当前 profile；此后 DSH host 启动时会自动启动插件管理的 `127.0.0.1:39081` 服务并加载已缓存的模型。关闭选项只影响后续 DSH 启动，不会立即停止当前正在运行的服务。
+
+SenseVoiceSmall 模型及原生推理依赖的来源、作者和许可证信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 也可以在插件外部手动启动服务。`--cors-origin` 必须与浏览器地址栏中的 DSH origin 完全一致；下面以测试环境 `http://127.0.0.1:3081` 为例：
 
@@ -120,6 +131,7 @@ funasr-server \
 - 插件内的服务启动、停止和状态检查只针对固定地址 `127.0.0.1:39081`；其他回环端点必须由用户在插件外部管理。
 - 本地端点是停止录音后的最终转写，目前提供 VAD 语音确认和约 600 ms 尾音保护，但不提供实时临时文字；固定的 `127.0.0.1:39081` 服务可由插件手动或随 DSH 自动管理，其他回环端点仍需由用户在插件外部管理。
 - 中英混合识别优化依赖浏览器及当前语音识别服务对 Web Speech contextual phrases 的支持；不支持时仍保留现有识别与模型润色流程。
+- 本地 ASR 一键安装当前只支持 macOS Apple Silicon；随包运行程序采用 ad-hoc 签名，尚未使用 Apple Developer ID 公证。其他平台仍可使用 Web Speech 或自行管理的回环端点。
 - 当前 DSH 尚未为外部插件开放自定义辅助模型请求的 Session 日志事件。插件辅助模型调用（词汇提取与润色）使用自己的受信 RPC，不会写入 DSH Session 日志；上游提供相应扩展点后应迁移到可重建的日志事件。
 
 ## 开发
