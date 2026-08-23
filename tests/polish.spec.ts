@@ -185,6 +185,7 @@ describe('model transcript polishing', () => {
       effect: (register: () => unknown) => register(),
       inject: vi.fn(),
       connection: { rpc: { handle } },
+      settings: { update: vi.fn(async () => {}) },
       sessions: { get: vi.fn(() => ({ deriveMessages: () => [] })) },
       llm: { stream: () => chunks('润色结果') },
     }
@@ -206,6 +207,22 @@ describe('model transcript polishing', () => {
       sessionId: 'session-1', provider: 'deepseek', model: 'chat', transcript: '原始转写', terms: [],
     }, signal)
     expect(result).toEqual({ ok: true, value: { text: '润色结果' } })
+
+    await expect(handler?.('local-service-autostart-status', {}, signal)).resolves.toEqual({
+      ok: true,
+      value: { enabled: false, origin: '' },
+    })
+    await expect(handler?.('local-service-autostart-set', {
+      enabled: true,
+      origin: 'http://127.0.0.1:3081',
+    }, signal)).resolves.toEqual({
+      ok: true,
+      value: { enabled: true, origin: 'http://127.0.0.1:3081' },
+    })
+    expect(ctx.settings.update).toHaveBeenCalledWith('dictate', {
+      localServiceAutoStart: true,
+      localServiceOrigin: 'http://127.0.0.1:3081',
+    })
   })
 
   it('extracts bounded recent technical terms without common prose', () => {

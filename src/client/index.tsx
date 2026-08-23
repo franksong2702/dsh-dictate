@@ -27,7 +27,11 @@ import {
 } from '../terms.ts'
 import { DICTATE_SETTINGS_NAMESPACE } from '../settings-contract.ts'
 import {
+  parseLocalServiceAutoStartSettings,
+  parseLocalServiceInstallStatus,
   parseLocalServiceStatus,
+  type LocalServiceAutoStartSettings,
+  type LocalServiceInstallStatus,
   type LocalServiceStatus,
 } from '../local-service-contract.ts'
 
@@ -127,6 +131,15 @@ function VoiceInputSettings({ loadModels, testEndpoint, localService }: {
     readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
     readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
     readonly stop: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly install: {
+      readonly status: (signal: AbortSignal) => Promise<LocalServiceInstallStatus>
+      readonly start: (signal: AbortSignal) => Promise<LocalServiceInstallStatus>
+      readonly cancel: (signal: AbortSignal) => Promise<LocalServiceInstallStatus>
+    }
+    readonly autoStart: {
+      readonly get: (signal: AbortSignal) => Promise<LocalServiceAutoStartSettings>
+      readonly set: (enabled: boolean, signal: AbortSignal) => Promise<LocalServiceAutoStartSettings>
+    }
   }
 }): ReactNode {
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([])
@@ -196,10 +209,43 @@ export function apply(ctx: ClientContext): void {
     if (!result.ok) throw new Error(result.error.message)
     return parseLocalServiceStatus(result.value)
   }
+  const callLocalServiceAutoStart = async (
+    endpoint: 'local-service-autostart-status' | 'local-service-autostart-set',
+    enabled: boolean | undefined,
+    signal: AbortSignal,
+  ): Promise<LocalServiceAutoStartSettings> => {
+    const payload = endpoint === 'local-service-autostart-set'
+      ? { enabled, origin: window.location.origin }
+      : {}
+    const result = await connection.rpc.call('/dictate', endpoint, payload, signal)
+    if (!result.ok) throw new Error(result.error.message)
+    return parseLocalServiceAutoStartSettings(result.value)
+  }
+  const callLocalServiceInstall = async (
+    endpoint: 'local-service-install-status' | 'local-service-install-start' | 'local-service-install-cancel',
+    signal: AbortSignal,
+  ): Promise<LocalServiceInstallStatus> => {
+    const payload = endpoint === 'local-service-install-start'
+      ? { origin: window.location.origin }
+      : {}
+    const result = await connection.rpc.call('/dictate', endpoint, payload, signal)
+    if (!result.ok) throw new Error(result.error.message)
+    return parseLocalServiceInstallStatus(result.value)
+  }
   const localService = {
     status: (signal: AbortSignal) => callLocalService('local-service-status', signal),
     start: (signal: AbortSignal) => callLocalService('local-service-start', signal),
     stop: (signal: AbortSignal) => callLocalService('local-service-stop', signal),
+    install: {
+      status: (signal: AbortSignal) => callLocalServiceInstall('local-service-install-status', signal),
+      start: (signal: AbortSignal) => callLocalServiceInstall('local-service-install-start', signal),
+      cancel: (signal: AbortSignal) => callLocalServiceInstall('local-service-install-cancel', signal),
+    },
+    autoStart: {
+      get: (signal: AbortSignal) => callLocalServiceAutoStart('local-service-autostart-status', undefined, signal),
+      set: (enabled: boolean, signal: AbortSignal) =>
+        callLocalServiceAutoStart('local-service-autostart-set', enabled, signal),
+    },
   }
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',

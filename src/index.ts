@@ -8,32 +8,84 @@ import { extractContextTermsForRequest } from './term-extraction.ts'
 import { parsePolishRequest, polishTranscript } from './polish.ts'
 import { DICTATE_SETTINGS_NAMESPACE } from './settings-contract.ts'
 import { parseContextTermsRequest } from './terms.ts'
-import { LocalServiceController } from './local-service.ts'
-import { parseLocalServiceStartRequest } from './local-service-contract.ts'
+import { LocalServiceAutoStartManager, LocalServiceController } from './local-service.ts'
+import { LocalServiceInstaller } from './local-service-installer.ts'
+import {
+  parseLocalServiceAutoStartRequest,
+  parseLocalServiceStartRequest,
+} from './local-service-contract.ts'
 
 /** Cordis plugin name used by the profile bundle patch. */
 export const name = 'dsh-dictate'
 
-/** Settings namespace used to pair the RC7 Host plugin with its browser card. */
+/** Settings namespace used to pair the Host plugin with its browser card. */
 const DICTATE_SETTINGS_NS = settingsNamespace(DICTATE_SETTINGS_NAMESPACE)
 
-/** Host configuration remains empty because dictation preferences are browser-local. */
-export interface Config {}
+/** Host-persisted service lifecycle settings; recognition preferences remain browser-local. */
+export interface Config {
+  readonly localServiceAutoStart: boolean
+  readonly localServiceOrigin: string
+}
 
-export const Config: z<Config> = z.object({})
+export const Config: z<Config> = z.object({
+  localServiceAutoStart: z.boolean().default(false),
+  localServiceOrigin: z.string().default(''),
+})
+
+const DEFAULT_CONFIG: Config = {
+  localServiceAutoStart: false,
+  localServiceOrigin: '',
+}
+
+function validateConfig(config: Config): void {
+  if (config.localServiceOrigin !== '') {
+    parseLocalServiceStartRequest({ origin: config.localServiceOrigin })
+  } else if (config.localServiceAutoStart) {
+    throw new Error('localServiceOrigin must be a loopback URL when auto-start is enabled')
+  }
+}
 
 /** Host services used by the browser-safe Contextual Dictation RPC. */
-export const inject = ['connection', 'llm', 'sessions']
+export const inject = ['connection', 'llm', 'sessions', 'settings']
 
 /** Register trusted-host terminology and transcript-polishing endpoints. */
-export function apply(ctx: Context, config: Config = {}): void {
+export function apply(ctx: Context, config: Config = DEFAULT_CONFIG): void {
   const host = ctx as Context & {
     readonly connection: HostConnectionHandle
     readonly llm: LlmRuntime
     readonly sessions: SessionStore
   }
-  const localService = new LocalServiceController()
-  ctx.effect(() => () => localService.dispose(), 'dictate: stop managed local ASR on plugin disposal')
+  const installer = new LocalServiceInstaller()
+  const nativeRuntimeSource = process.env.DSH_DICTATE_NATIVE_RUNTIME_SOURCE?.trim()
+  const localService = new LocalServiceController(undefined, nativeRuntimeSource === undefined || nativeRuntimeSource === ''
+    ? {}
+    : {
+        executable: installer.executablePath,
+        workingDirectory: installer.installRoot,
+        modelPath: installer.modelPath,
+      })
+  const autoStart = new LocalServiceAutoStartManager(localService)
+  let currentConfig = (): Config => config
+  let stopped = false
+  let reconcileTail = Promise.resolve()
+  const scheduleAutoStart = (): void => {
+    reconcileTail = reconcileTail.then(async () => {
+      if (stopped) return
+      await autoStart.reconcile(currentConfig())
+    }, async () => {
+      if (stopped) return
+      await autoStart.reconcile(currentConfig())
+    }).catch((error: unknown) => {
+      ctx.logger.warn('dsh-dictate: local ASR auto-start failed')
+      ctx.logger.warn(error)
+    })
+  }
+  ctx.effect(() => async () => {
+    stopped = true
+    await reconcileTail
+    await localService.dispose()
+    await installer.dispose()
+  }, 'dictate: stop managed local ASR on plugin disposal')
   ctx.effect(() => host.connection.rpc.handle('/dictate', async (endpoint, payload, signal) => {
     try {
       if (endpoint === 'local-service-status') {
@@ -41,10 +93,40 @@ export function apply(ctx: Context, config: Config = {}): void {
       }
       if (endpoint === 'local-service-start') {
         const request = parseLocalServiceStartRequest(payload)
-        return { ok: true, value: await localService.start(request.origin) }
+        return { ok: true, value: await localService.start(request.origin, signal) }
       }
       if (endpoint === 'local-service-stop') {
         return { ok: true, value: await localService.stop() }
+      }
+      if (endpoint === 'local-service-install-status') {
+        return { ok: true, value: await installer.status() }
+      }
+      if (endpoint === 'local-service-install-start') {
+        const request = parseLocalServiceStartRequest(payload)
+        return {
+          ok: true,
+          value: await installer.start(async installSignal => {
+            await localService.start(request.origin, installSignal)
+          }),
+        }
+      }
+      if (endpoint === 'local-service-install-cancel') {
+        return { ok: true, value: await installer.cancel() }
+      }
+      if (endpoint === 'local-service-autostart-status') {
+        const current = currentConfig()
+        return { ok: true, value: {
+          enabled: current.localServiceAutoStart,
+          origin: current.localServiceOrigin,
+        } }
+      }
+      if (endpoint === 'local-service-autostart-set') {
+        const request = parseLocalServiceAutoStartRequest(payload)
+        await host.settings.update(DICTATE_SETTINGS_NS, {
+          localServiceAutoStart: request.enabled,
+          localServiceOrigin: request.origin,
+        })
+        return { ok: true, value: request }
       }
       if (endpoint === 'terms') {
         const request = parseContextTermsRequest(payload)
@@ -72,9 +154,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
   }, { authority: 'trusted-host' }), 'dictate: contextual terminology and model polish RPC')
   installSettingsSection(ctx, DICTATE_SETTINGS_NS, Config, config, {
-    setSource() {
-      // Dictation preferences intentionally remain local to each browser.
-    },
-    onChange() {},
+    setSource(source) { currentConfig = source },
+    onChange: scheduleAutoStart,
+    validate: validateConfig,
   })
 }

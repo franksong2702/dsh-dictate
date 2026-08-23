@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  LocalServiceAutoStartManager,
   LocalServiceController,
   type LocalServiceProcess,
   type LocalServiceRuntime,
 } from '../src/local-service.ts'
 import {
+  parseLocalServiceAutoStartRequest,
+  parseLocalServiceAutoStartSettings,
   parseLocalServiceStartRequest,
   parseLocalServiceStatus,
 } from '../src/local-service-contract.ts'
@@ -54,6 +57,55 @@ function runtime(overrides: Partial<LocalServiceRuntime> = {}): LocalServiceRunt
 }
 
 describe('local SenseVoice service controller', () => {
+  it('accepts only explicit auto-start settings with a loopback origin', () => {
+    expect(parseLocalServiceAutoStartRequest({
+      enabled: true,
+      origin: 'http://127.0.0.1:3081',
+    })).toEqual({ enabled: true, origin: 'http://127.0.0.1:3081' })
+    expect(parseLocalServiceAutoStartSettings({
+      enabled: false,
+      origin: 'http://localhost:3081',
+    })).toEqual({ enabled: false, origin: 'http://localhost:3081' })
+    expect(() => parseLocalServiceAutoStartRequest({
+      enabled: true,
+      origin: 'https://example.com',
+    })).toThrow('origin must be a loopback URL')
+  })
+
+  it('auto-starts from persisted settings and restarts only when the CORS origin changes', async () => {
+    const status = vi.fn(async () => ({ phase: 'running', managed: true }))
+    const start = vi.fn(async () => ({ phase: 'starting' }))
+    const stop = vi.fn(async () => ({ phase: 'stopped' }))
+    const manager = new LocalServiceAutoStartManager({ status, start, stop } as never)
+
+    await manager.reconcile({
+      localServiceAutoStart: false,
+      localServiceOrigin: 'http://127.0.0.1:3081',
+    })
+    expect(start).not.toHaveBeenCalled()
+
+    await manager.reconcile({
+      localServiceAutoStart: true,
+      localServiceOrigin: 'http://127.0.0.1:3081',
+    })
+    expect(start).toHaveBeenCalledWith('http://127.0.0.1:3081')
+    expect(stop).not.toHaveBeenCalled()
+
+    await manager.reconcile({
+      localServiceAutoStart: true,
+      localServiceOrigin: 'http://localhost:3081',
+    })
+    expect(status).toHaveBeenCalledOnce()
+    expect(stop).toHaveBeenCalledOnce()
+    expect(start).toHaveBeenLastCalledWith('http://localhost:3081')
+
+    await manager.reconcile({
+      localServiceAutoStart: false,
+      localServiceOrigin: 'http://localhost:3081',
+    })
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
   it('accepts only loopback browser origins', () => {
     expect(parseLocalServiceStartRequest({ origin: 'http://127.0.0.1:3081' })).toEqual({
       origin: 'http://127.0.0.1:3081',
@@ -121,6 +173,72 @@ describe('local SenseVoice service controller', () => {
 
     await expect(controller.stop()).resolves.toMatchObject({ phase: 'stopped', managed: false })
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('passes an installed native model path to the internal runtime', async () => {
+    const child = new FakeProcess()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+    const testRuntime = runtime({
+      fetch: fetchMock,
+      spawn: vi.fn(() => child),
+    })
+    const controller = new LocalServiceController(testRuntime, {
+      executable: '/test/dsh-dictate-asr',
+      workingDirectory: '/test/install-root',
+      modelPath: '/test/install-root/models/SenseVoiceSmall-Q8_0.gguf',
+    })
+
+    await controller.start('http://127.0.0.1:3081')
+    expect(testRuntime.spawn).toHaveBeenCalledWith('/test/dsh-dictate-asr', [
+      '--host', '127.0.0.1',
+      '--port', '39081',
+      '--device', 'cpu',
+      '--model-path', '/test/install-root/models/SenseVoiceSmall-Q8_0.gguf',
+      '--cors-origin', 'http://127.0.0.1:3081',
+    ], expect.objectContaining({ cwd: '/test/install-root' }))
+    await controller.stop()
+  })
+
+  it('serializes concurrent starts before the first health check completes', async () => {
+    let releaseInitialHealth!: (response: Response) => void
+    const initialHealth = new Promise<Response>(resolve => { releaseInitialHealth = resolve })
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => initialHealth)
+      .mockResolvedValue(new Response('', { status: 503 }))
+    const testRuntime = runtime({ fetch: fetchMock })
+    const controller = new LocalServiceController(testRuntime)
+
+    const first = controller.start('http://127.0.0.1:3081')
+    const second = controller.start('http://127.0.0.1:3081')
+    expect(testRuntime.spawn).not.toHaveBeenCalled()
+
+    releaseInitialHealth(new Response('', { status: 503 }))
+    await Promise.all([first, second])
+    expect(testRuntime.spawn).toHaveBeenCalledOnce()
+    await controller.stop()
+  })
+
+  it('restarts a managed process when the requested CORS origin changes on first reconcile', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+    const spawn = vi.fn(() => new FakeProcess())
+    const testRuntime = runtime({ fetch: fetchMock, spawn })
+    const controller = new LocalServiceController(testRuntime)
+    const manager = new LocalServiceAutoStartManager(controller)
+
+    await controller.start('http://127.0.0.1:3080')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await manager.reconcile({
+      localServiceAutoStart: true,
+      localServiceOrigin: 'http://127.0.0.1:3081',
+    })
+
+    expect(spawn).toHaveBeenCalledTimes(2)
+    expect(spawn.mock.calls[1]?.[1]).toContain('http://127.0.0.1:3081')
+    await controller.stop()
   })
 
   it('reports only model-download percentages observed in server output', async () => {

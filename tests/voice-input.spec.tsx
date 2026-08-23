@@ -240,7 +240,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     const endpoint = screen.getByLabelText('本地服务地址') as HTMLInputElement
     expect(endpoint.value).toBe('http://127.0.0.1:39081')
-    expect(screen.getByText(/不会在浏览器中下载模型/)).not.toBeNull()
+    expect(screen.getByText(/模型由 DSH host 安装/)).not.toBeNull()
     expect((screen.getByLabelText('本地服务不可用时') as HTMLSelectElement).value).toBe('local-only')
     fireEvent.change(screen.getByLabelText('本地服务不可用时'), { target: { value: 'ask' } })
     expect(loadPrefs().localFallbackPolicy).toBe('ask')
@@ -337,6 +337,110 @@ describe('Contextual Dictation browser plugin', () => {
     })
     expect(stop).toHaveBeenCalledWith(expect.any(AbortSignal))
     expect(screen.getByRole('status').textContent).toContain('本地服务已停止')
+  })
+
+  it('offers one-click native ASR installation and shows host progress', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    const serviceStatus = {
+      phase: 'stopped' as const,
+      stage: 'idle' as const,
+      endpoint: 'http://127.0.0.1:39081',
+      managed: false,
+      message: '本地服务未启动',
+      progressPercent: null,
+      elapsedSeconds: null,
+    }
+    let currentInstallStatus = {
+      available: true,
+      phase: 'not-installed' as const,
+      stage: 'idle' as const,
+      message: '尚未安装本地 ASR 环境',
+      progressPercent: null,
+      completedBytes: null,
+      totalBytes: null,
+      platform: 'darwin-arm64',
+      installPath: '/test/dsh-home/runtimes/dsh-dictate/local-asr',
+    }
+    const installStatus = vi.fn(async () => currentInstallStatus)
+    const installStart = vi.fn(async () => {
+      currentInstallStatus = {
+        available: true,
+        phase: 'installing' as const,
+        stage: 'copying-model' as const,
+        message: '正在安装 SenseVoice Q8 模型',
+        progressPercent: 42,
+        completedBytes: 106_000_000,
+        totalBytes: 257_000_000,
+        platform: 'darwin-arm64',
+        installPath: '/test/dsh-home/runtimes/dsh-dictate/local-asr',
+      }
+      return currentInstallStatus
+    })
+    render(<SettingsPanel localService={{
+      status: vi.fn(async () => serviceStatus),
+      start: vi.fn(async () => serviceStatus),
+      stop: vi.fn(async () => serviceStatus),
+      install: {
+        status: installStatus,
+        start: installStart,
+        cancel: vi.fn(async () => installStart()),
+      },
+    }} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    await act(async () => { await Promise.resolve() })
+
+    expect(screen.getByText('尚未安装本地 ASR 环境')).not.toBeNull()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '安装并准备本地 ASR' }))
+      await Promise.resolve()
+    })
+    expect(installStart).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect((screen.getByRole('progressbar', { name: '本地 ASR 安装进度' }) as HTMLProgressElement).value).toBe(42)
+    expect(screen.getByText(/101.1 MB \/ 245.1 MB/)).not.toBeNull()
+    expect(screen.getByRole('button', { name: '取消安装' })).not.toBeNull()
+  })
+
+  it('persists an explicit host auto-start choice without stopping the current service', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint' })
+    const status = vi.fn(async () => ({
+      phase: 'running' as const,
+      stage: 'ready' as const,
+      endpoint: 'http://127.0.0.1:39081',
+      managed: true,
+      message: '本地 SenseVoice 服务运行中',
+      progressPercent: null,
+      elapsedSeconds: 8,
+    }))
+    const start = vi.fn(async () => status())
+    const stop = vi.fn(async () => status())
+    const getAutoStart = vi.fn(async () => ({
+      enabled: false,
+      origin: 'http://127.0.0.1:3081',
+    }))
+    const setAutoStart = vi.fn(async (enabled: boolean) => ({
+      enabled,
+      origin: 'http://127.0.0.1:3081',
+    }))
+    render(<SettingsPanel localService={{
+      status,
+      start,
+      stop,
+      autoStart: { get: getAutoStart, set: setAutoStart },
+    }} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    await act(async () => { await Promise.resolve() })
+
+    const toggle = screen.getByRole('checkbox', { name: '随 DSH 自动启动本地服务' }) as HTMLInputElement
+    expect(toggle.checked).toBe(false)
+    await act(async () => {
+      fireEvent.click(toggle)
+      await Promise.resolve()
+    })
+
+    expect(setAutoStart).toHaveBeenCalledWith(true, expect.any(AbortSignal))
+    expect(toggle.checked).toBe(true)
+    expect(stop).not.toHaveBeenCalled()
+    expect(screen.getByText(/关闭只影响后续启动/)).not.toBeNull()
   })
 
   it('shows real startup progress, cancel, retry, and diagnostics', async () => {

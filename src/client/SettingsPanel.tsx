@@ -1,7 +1,11 @@
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { LANGUAGE_OPTIONS, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
-import type { LocalServiceStatus } from '../local-service-contract.ts'
+import type {
+  LocalServiceAutoStartSettings,
+  LocalServiceInstallStatus,
+  LocalServiceStatus,
+} from '../local-service-contract.ts'
 
 const SERVICE_STAGE_LABELS: Record<LocalServiceStatus['stage'], string> = {
   idle: '未启动',
@@ -36,6 +40,12 @@ function readableError(error: unknown, fallback: string): string {
   return fallback
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
+}
+
 /** One model exposed by the host for optional transcript polishing. */
 export interface ModelOption {
   readonly value: string
@@ -50,6 +60,15 @@ export interface SettingsPanelProps {
     readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
     readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
     readonly stop: (signal: AbortSignal) => Promise<LocalServiceStatus>
+    readonly install?: {
+      readonly status: (signal: AbortSignal) => Promise<LocalServiceInstallStatus>
+      readonly start: (signal: AbortSignal) => Promise<LocalServiceInstallStatus>
+      readonly cancel: (signal: AbortSignal) => Promise<LocalServiceInstallStatus>
+    }
+    readonly autoStart?: {
+      readonly get: (signal: AbortSignal) => Promise<LocalServiceAutoStartSettings>
+      readonly set: (enabled: boolean, signal: AbortSignal) => Promise<LocalServiceAutoStartSettings>
+    }
   }
 }
 
@@ -60,15 +79,28 @@ export function SettingsPanel({
   localService,
 }: SettingsPanelProps = {}): ReactNode {
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
+  const localInstaller = localService?.install
   const [open, setOpen] = useState(false)
   const [serviceStatus, setServiceStatus] = useState<LocalServiceStatus>()
   const [serviceBusy, setServiceBusy] = useState(false)
   const [serviceError, setServiceError] = useState('')
+  const [installStatus, setInstallStatus] = useState<LocalServiceInstallStatus>()
+  const [installBusy, setInstallBusy] = useState(false)
+  const [installError, setInstallError] = useState('')
+  const [autoStartSettings, setAutoStartSettings] = useState<LocalServiceAutoStartSettings>()
+  const [autoStartBusy, setAutoStartBusy] = useState(false)
+  const [autoStartError, setAutoStartError] = useState('')
   const [endpointTestBusy, setEndpointTestBusy] = useState(false)
   const [endpointTestResult, setEndpointTestResult] = useState<{ ok: boolean; message: string }>()
   const endpointTestControllerRef = useRef<AbortController>()
+  const autoStartControllerRef = useRef<AbortController>()
+  const installControllerRef = useRef<AbortController>()
 
-  useEffect(() => () => { endpointTestControllerRef.current?.abort() }, [])
+  useEffect(() => () => {
+    endpointTestControllerRef.current?.abort()
+    autoStartControllerRef.current?.abort()
+    installControllerRef.current?.abort()
+  }, [])
 
   useEffect(() => {
     endpointTestControllerRef.current?.abort()
@@ -99,6 +131,66 @@ export function SettingsPanel({
       window.clearInterval(timer)
     }
   }, [localService, prefs.transcriptionProvider])
+
+  useEffect(() => {
+    if (prefs.transcriptionProvider !== 'local-endpoint' || localInstaller === undefined) return
+    const controller = new AbortController()
+    installControllerRef.current = controller
+    const refresh = (): void => {
+      void localInstaller.status(controller.signal).then((status) => {
+        if (!controller.signal.aborted) {
+          setInstallStatus(status)
+          setInstallError('')
+        }
+      }, (error: unknown) => {
+        if (!controller.signal.aborted) {
+          setInstallError(readableError(error, '无法检查本地 ASR 安装状态'))
+        }
+      })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, installStatus?.phase === 'installing' ? 500 : 3000)
+    return () => {
+      controller.abort()
+      window.clearInterval(timer)
+    }
+  }, [installStatus?.phase, localInstaller, prefs.transcriptionProvider])
+
+  useEffect(() => {
+    if (prefs.transcriptionProvider !== 'local-endpoint' || localService?.autoStart === undefined) return
+    const controller = new AbortController()
+    autoStartControllerRef.current = controller
+    setAutoStartBusy(true)
+    setAutoStartError('')
+    void localService.autoStart.get(controller.signal).then((settings) => {
+      if (!controller.signal.aborted) setAutoStartSettings(settings)
+    }, (error: unknown) => {
+      if (!controller.signal.aborted) {
+        setAutoStartError(readableError(error, '无法读取自动启动设置'))
+      }
+    }).finally(() => {
+      if (autoStartControllerRef.current === controller) setAutoStartBusy(false)
+    })
+    return () => controller.abort()
+  }, [localService, prefs.transcriptionProvider])
+
+  const updateAutoStart = (enabled: boolean): void => {
+    if (localService?.autoStart === undefined) return
+    autoStartControllerRef.current?.abort()
+    const controller = new AbortController()
+    autoStartControllerRef.current = controller
+    setAutoStartBusy(true)
+    setAutoStartError('')
+    void localService.autoStart.set(enabled, controller.signal).then((settings) => {
+      if (!controller.signal.aborted) setAutoStartSettings(settings)
+    }, (error: unknown) => {
+      if (!controller.signal.aborted) {
+        setAutoStartError(readableError(error, '无法保存自动启动设置'))
+      }
+    }).finally(() => {
+      if (autoStartControllerRef.current === controller) setAutoStartBusy(false)
+    })
+  }
 
   const runServiceAction = (
     action: (signal: AbortSignal) => Promise<LocalServiceStatus>,
@@ -135,6 +227,28 @@ export function SettingsPanel({
         endpointTestControllerRef.current = undefined
         setEndpointTestBusy(false)
       }
+    })
+  }
+
+  const runInstallAction = (
+    action: (signal: AbortSignal) => Promise<LocalServiceInstallStatus>,
+  ): void => {
+    installControllerRef.current?.abort()
+    const controller = new AbortController()
+    installControllerRef.current = controller
+    setInstallBusy(true)
+    setInstallError('')
+    void action(controller.signal).then((status) => {
+      if (!controller.signal.aborted) {
+        setInstallStatus(status)
+        if (status.phase === 'installed') updatePrefs({ localEndpoint: 'http://127.0.0.1:39081' })
+      }
+    }, (error: unknown) => {
+      if (!controller.signal.aborted) {
+        setInstallError(readableError(error, '本地 ASR 安装操作失败'))
+      }
+    }).finally(() => {
+      if (installControllerRef.current === controller) setInstallBusy(false)
     })
   }
 
@@ -255,7 +369,7 @@ export function SettingsPanel({
                 />
               </label>
               <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-                录音结束后发送到本机 SenseVoice 服务；不会在浏览器中下载模型。首次使用可能下载接近 1 GB 的模型文件，下载与加载可能持续数十秒到数分钟。启动期间可以取消，再次启动会重新检查本地缓存。
+                录音结束后发送到本机 SenseVoice 服务；模型由 DSH host 安装，不会在浏览器中运行。质量优先的 Q8 模型约 253 MB，首次安装时间取决于网络速度。
               </p>
               <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                 <button
@@ -325,6 +439,86 @@ export function SettingsPanel({
                     borderRadius: 8,
                   }}
                 >
+                  {localInstaller !== undefined ? (
+                    <div
+                      style={{
+                        display: 'grid',
+                        gap: 8,
+                        paddingBottom: 10,
+                        borderBottom: '1px solid var(--dsw-alias-border-l2)',
+                      }}
+                    >
+                      <strong style={{ fontSize: 13 }}>本地 ASR 环境</strong>
+                      <span role={installError === '' ? 'status' : 'alert'} style={{ fontSize: 12 }}>
+                        {installError !== ''
+                          ? installError
+                          : installStatus?.message ?? '正在检查安装状态'}
+                      </span>
+                      {installStatus?.phase === 'installing' && installStatus.progressPercent !== null ? (
+                        <>
+                          <progress
+                            aria-label="本地 ASR 安装进度"
+                            max={100}
+                            value={installStatus.progressPercent}
+                            style={{ width: '100%' }}
+                          />
+                          <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
+                            {installStatus.completedBytes === null || installStatus.totalBytes === null
+                              ? `${installStatus.progressPercent}%`
+                              : `${formatBytes(installStatus.completedBytes)} / ${formatBytes(installStatus.totalBytes)}（${installStatus.progressPercent}%）`}
+                          </span>
+                        </>
+                      ) : null}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {installStatus?.phase === 'installing' ? (
+                          <button
+                            type="button"
+                            disabled={installBusy}
+                            onClick={() => { runInstallAction(localInstaller.cancel) }}
+                          >
+                            取消安装
+                          </button>
+                        ) : installStatus?.phase === 'installed' || installStatus?.phase === 'unsupported'
+                          || installStatus?.available === false ? null : (
+                          <button
+                            type="button"
+                            disabled={installBusy || installStatus === undefined}
+                            onClick={() => { runInstallAction(localInstaller.start) }}
+                          >
+                            {installStatus?.phase === 'error' ? '重新安装本地 ASR' : '安装并准备本地 ASR'}
+                          </button>
+                        )}
+                      </div>
+                      <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+                        {installStatus?.available === false
+                          ? '当前发行包未配置公开原生安装源；请在 DSH host 中准备 funasr-server，或使用内部测试构建。'
+                          : '当前为 macOS arm64 内部测试安装源；安装目录与系统 Python 完全隔离。'}
+                      </p>
+                    </div>
+                  ) : null}
+                  {localService.autoStart !== undefined ? (
+                    <>
+                      <label
+                        htmlFor="dictate-local-autostart"
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
+                      >
+                        <input
+                          id="dictate-local-autostart"
+                          type="checkbox"
+                          checked={autoStartSettings?.enabled ?? false}
+                          disabled={autoStartBusy || autoStartSettings === undefined
+                            || (localInstaller !== undefined && installStatus?.available !== false
+                              && installStatus?.phase !== 'installed')}
+                          onChange={event => { updateAutoStart(event.currentTarget.checked) }}
+                        />
+                        <span>随 DSH 自动启动本地服务</span>
+                      </label>
+                      <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+                        保存到当前 DSH profile；DSH 启动后会自动加载缓存模型。关闭只影响后续启动，不会停止当前服务。
+                      </p>
+                      {autoStartError !== '' ? <span role="alert" style={{ fontSize: 12 }}>{autoStartError}</span> : null}
+                    </>
+                  ) : null}
                   <span role={serviceError === '' ? 'status' : 'alert'} style={{ fontSize: 12 }}>
                     {serviceError !== ''
                       ? `服务状态：${serviceError}`
@@ -368,7 +562,9 @@ export function SettingsPanel({
                     ) : (
                       <button
                         type="button"
-                        disabled={serviceBusy}
+                        disabled={serviceBusy
+                          || (localInstaller !== undefined && installStatus?.available !== false
+                            && installStatus?.phase !== 'installed')}
                         onClick={() => { runServiceAction(localService.start) }}
                       >
                         {serviceStatus?.phase === 'error' ? '重新启动服务' : '启动服务'}
