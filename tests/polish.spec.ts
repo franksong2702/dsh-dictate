@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { apply } from '../src/index.ts'
 import {
@@ -20,6 +23,13 @@ import {
   TERM_EXTRACTION_SYSTEM_PROMPT,
 } from '../src/term-extraction.ts'
 import { extractContextTerms } from '../src/terms.ts'
+
+const temporaryRoots: string[] = []
+
+afterEach(async () => {
+  vi.unstubAllEnvs()
+  await Promise.all(temporaryRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+})
 
 function message(
   role: Message['role'],
@@ -175,6 +185,9 @@ describe('model transcript polishing', () => {
   })
 
   it('registers a trusted-host RPC and returns the polished text', async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), 'dsh-dictate-host-'))
+    temporaryRoots.push(dshHome)
+    vi.stubEnv('DSH_HOME', dshHome)
     let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
     const handle = vi.fn((_channel, next, options) => {
       handler = next
@@ -222,6 +235,16 @@ describe('model transcript polishing', () => {
     expect(ctx.settings.update).toHaveBeenCalledWith('dictate', {
       localServiceAutoStart: true,
       localServiceOrigin: 'http://127.0.0.1:3081',
+    })
+    await expect(handler?.('local-service-start', {
+      origin: 'http://127.0.0.1:3081',
+    }, signal)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'internal',
+        message: '本地语音识别需要先在插件设置中完成安装或更新',
+        details: {},
+      },
     })
   })
 

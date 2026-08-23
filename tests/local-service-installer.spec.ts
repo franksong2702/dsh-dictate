@@ -107,6 +107,58 @@ describe('native local ASR installer', () => {
     })
   })
 
+  it('requires the installed runtime to match the current bundle and reuses the verified model on upgrade', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-dictate-installer-'))
+    roots.push(root)
+    const oldRuntimeSource = join(root, 'old-runtime')
+    const newRuntimeSource = join(root, 'new-runtime')
+    const modelSource = join(root, 'model-source')
+    const oldRuntimeBytes = Buffer.from('old-native-runtime')
+    const newRuntimeBytes = Buffer.from('new-native-runtime')
+    const modelBytes = Buffer.from('sensevoice-model')
+    await Promise.all([
+      writeFile(oldRuntimeSource, oldRuntimeBytes),
+      writeFile(newRuntimeSource, newRuntimeBytes),
+      writeFile(modelSource, modelBytes),
+    ])
+    const runtime: LocalServiceInstallerRuntime = {
+      env: {
+        DSH_HOME: join(root, 'dsh-home'),
+        DSH_DICTATE_NATIVE_MODEL_SOURCE: modelSource,
+      },
+      platform: 'darwin',
+      arch: 'arm64',
+      fetch: vi.fn(),
+      delay: vi.fn(async () => {}),
+    }
+    const artifacts = (runtimeSource: string, runtimeBytes: Buffer): InstallerArtifacts => ({
+      modelFilename: 'model.gguf',
+      modelSize: modelBytes.length,
+      modelSha256: digest(modelBytes),
+      modelUrl: 'https://example.invalid/model.gguf',
+      bundledRuntimeSource: runtimeSource,
+      runtimeSize: runtimeBytes.length,
+      runtimeSha256: digest(runtimeBytes),
+    })
+    const oldInstaller = new LocalServiceInstaller(runtime, artifacts(oldRuntimeSource, oldRuntimeBytes))
+    await oldInstaller.start(async () => {})
+    await waitForInstall(oldInstaller)
+
+    const upgradedRuntime = { ...runtime, env: { DSH_HOME: runtime.env.DSH_HOME } }
+    const upgradedInstaller = new LocalServiceInstaller(
+      upgradedRuntime,
+      artifacts(newRuntimeSource, newRuntimeBytes),
+    )
+    await expect(upgradedInstaller.status()).resolves.toMatchObject({ phase: 'not-installed' })
+    await upgradedInstaller.start(async () => {})
+    await waitForInstall(upgradedInstaller)
+
+    expect(upgradedRuntime.fetch).not.toHaveBeenCalled()
+    await expect(readFile(upgradedInstaller.executablePath)).resolves.toEqual(newRuntimeBytes)
+    await expect(readFile(upgradedInstaller.modelPath)).resolves.toEqual(modelBytes)
+    await expect(upgradedInstaller.status()).resolves.toMatchObject({ phase: 'installed' })
+  })
+
   it('copies and verifies isolated runtime/model artifacts before starting the service', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-dictate-installer-'))
     roots.push(root)

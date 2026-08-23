@@ -11,7 +11,7 @@ const work = await mkdtemp(join(tmpdir(), 'dsh-dictate-package-'))
 const packedNodeModules = join(work, 'unpack', 'package', 'node_modules')
 const requiredKeywords = ['deepseek-harness', 'voice-input', 'speech-to-text', 'sensevoice']
 const nativeRuntime = 'native/darwin-arm64/dsh-dictate-asr'
-const nativeRuntimeSha256 = '3807d45cb7ec47e5f8ce73698319861d6be04c09a90d30848abcefad80426e6a'
+const nativeRuntimeSha256 = 'dab83ea0c5bfa95b8e9c94f804da7d88c9fc5657ac5ac8503554ec338d5db52f'
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, { cwd, encoding: 'utf8' })

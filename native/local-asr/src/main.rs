@@ -7,8 +7,9 @@ use std::{
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, State},
-    http::{HeaderValue, Method, StatusCode},
-    response::IntoResponse,
+    http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -55,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let origin = HeaderValue::from_str(&args.cors_origin)?;
     let cors = CorsLayer::new()
-        .allow_origin(origin)
+        .allow_origin(origin.clone())
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers(Any);
     let app = Router::new()
@@ -64,12 +65,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/audio/transcriptions", post(transcribe))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .layer(cors)
+        .layer(middleware::from_fn_with_state(origin, require_origin))
         .with_state(state);
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), args.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!("Native SenseVoice runtime listening on http://{address}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn require_origin(
+    State(allowed_origin): State<HeaderValue>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if !origin_allowed(request.headers(), &allowed_origin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(request).await)
+}
+
+fn origin_allowed(headers: &HeaderMap, allowed_origin: &HeaderValue) -> bool {
+    headers
+        .get(header::ORIGIN)
+        .is_none_or(|origin| origin == allowed_origin)
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<Health<'static>> {
@@ -206,4 +225,29 @@ fn default_model_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .and_then(Path::parent)
         .ok_or("cannot resolve install root")?;
     Ok(root.join("models/SenseVoiceSmall-Q8_0.gguf"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_the_configured_origin_and_host_requests_without_an_origin() {
+        let allowed = HeaderValue::from_static("http://127.0.0.1:3081");
+        let mut headers = HeaderMap::new();
+        assert!(origin_allowed(&headers, &allowed));
+        headers.insert(header::ORIGIN, allowed.clone());
+        assert!(origin_allowed(&headers, &allowed));
+    }
+
+    #[test]
+    fn rejects_an_untrusted_browser_origin() {
+        let allowed = HeaderValue::from_static("http://127.0.0.1:3081");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://untrusted.example"),
+        );
+        assert!(!origin_allowed(&headers, &allowed));
+    }
 }

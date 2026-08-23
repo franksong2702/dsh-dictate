@@ -19,8 +19,8 @@ const MODEL_SIZE = 252_684_608
 const MODEL_SHA256 = '6c759ee4c9748c9b3f7a5a60ca74f0f7e685fb9d45d1378fce7cfd62f59adf29'
 const MODEL_URL = 'https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/4a08b8e900b38a977e32eb08d5d0697d6e72ba04/SenseVoiceSmall-Q8_0.gguf'
 const RUNTIME_FILENAME = 'dsh-dictate-asr'
-const RUNTIME_SIZE = 4_578_176
-const RUNTIME_SHA256 = '3807d45cb7ec47e5f8ce73698319861d6be04c09a90d30848abcefad80426e6a'
+const RUNTIME_SIZE = 4_621_600
+const RUNTIME_SHA256 = 'dab83ea0c5bfa95b8e9c94f804da7d88c9fc5657ac5ac8503554ec338d5db52f'
 const BUNDLED_RUNTIME_SOURCE = fileURLToPath(new URL('../native/darwin-arm64/dsh-dictate-asr', import.meta.url))
 const MANIFEST_FILENAME = 'install.json'
 const COPY_CHUNK_BYTES = 1024 * 1024
@@ -243,31 +243,39 @@ export class LocalServiceInstaller {
     await chmod(runtimePartial, 0o755)
     await rename(runtimePartial, this.executablePath)
 
-    const modelSource = this.runtime.env.DSH_DICTATE_NATIVE_MODEL_SOURCE?.trim()
-    if (modelSource !== undefined && modelSource !== '') {
-      if (!isAbsolute(modelSource)) throw new Error('本地模型安装源必须是绝对路径')
-      await this.copyLocalArtifact(
-        modelSource,
-        `${this.modelPath}.partial`,
-        runtimeSize,
-        'copying-model',
-        '正在安装 SenseVoice Q8 模型',
-        signal,
-      )
+    let modelSha256 = await this.validModelSha256(this.modelPath)
+    let modelSize = this.artifacts.modelSize
+    if (modelSha256 === undefined) {
+      const modelSource = this.runtime.env.DSH_DICTATE_NATIVE_MODEL_SOURCE?.trim()
+      if (modelSource !== undefined && modelSource !== '') {
+        if (!isAbsolute(modelSource)) throw new Error('本地模型安装源必须是绝对路径')
+        await this.copyLocalArtifact(
+          modelSource,
+          `${this.modelPath}.partial`,
+          runtimeSize,
+          'copying-model',
+          '正在安装 SenseVoice Q8 模型',
+          signal,
+        )
+      } else {
+        await this.downloadModel(runtimeSize, signal)
+      }
+      this.stage = 'verifying'
+      this.message = '正在校验 SenseVoice 模型完整性'
+      modelSize = (await stat(`${this.modelPath}.partial`)).size
+      if (modelSize !== this.artifacts.modelSize) {
+        throw new Error(`SenseVoice 模型大小不正确：${modelSize}`)
+      }
+      modelSha256 = await sha256(`${this.modelPath}.partial`)
+      if (modelSha256 !== this.artifacts.modelSha256) {
+        throw new Error('SenseVoice 模型完整性校验失败')
+      }
+      await rename(`${this.modelPath}.partial`, this.modelPath)
     } else {
-      await this.downloadModel(runtimeSize, signal)
+      this.stage = 'verifying'
+      this.message = '已复用通过校验的 SenseVoice 模型'
+      this.updateProgress(runtimeSize + modelSize)
     }
-    this.stage = 'verifying'
-    this.message = '正在校验 SenseVoice 模型完整性'
-    const modelSize = (await stat(`${this.modelPath}.partial`)).size
-    if (modelSize !== this.artifacts.modelSize) {
-      throw new Error(`SenseVoice 模型大小不正确：${modelSize}`)
-    }
-    const modelSha256 = await sha256(`${this.modelPath}.partial`)
-    if (modelSha256 !== this.artifacts.modelSha256) {
-      throw new Error('SenseVoice 模型完整性校验失败')
-    }
-    await rename(`${this.modelPath}.partial`, this.modelPath)
     const manifest: InstallManifest = {
       version: 1,
       platform: `${this.runtime.platform}-${this.runtime.arch}`,
@@ -404,7 +412,11 @@ export class LocalServiceInstaller {
         && manifest.modelSha256 === this.artifacts.modelSha256
         && manifest.modelSize === this.artifacts.modelSize
         && typeof manifest.runtimeSha256 === 'string'
+        && (this.artifacts.runtimeSha256 === undefined
+          || manifest.runtimeSha256 === this.artifacts.runtimeSha256)
         && runtimeInfo.isFile()
+        && (this.artifacts.runtimeSize === undefined
+          || runtimeInfo.size === this.artifacts.runtimeSize)
         && modelInfo.isFile()
         && modelInfo.size === this.artifacts.modelSize
       if (!manifestValid) return false
@@ -426,6 +438,17 @@ export class LocalServiceInstaller {
       return true
     } catch {
       return false
+    }
+  }
+
+  private async validModelSha256(path: string): Promise<string | undefined> {
+    try {
+      const info = await stat(path)
+      if (!info.isFile() || info.size !== this.artifacts.modelSize) return undefined
+      const digest = await sha256(path)
+      return digest === this.artifacts.modelSha256 ? digest : undefined
+    } catch {
+      return undefined
     }
   }
 }
