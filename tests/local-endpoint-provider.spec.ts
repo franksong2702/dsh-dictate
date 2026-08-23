@@ -171,6 +171,46 @@ describe('local endpoint provider', () => {
     expect(fixture.waitMock).toHaveBeenCalledWith(600, expect.any(AbortSignal))
   })
 
+  it('transcribes bounded audio segments serially and preserves their order', async () => {
+    let resolveFirst: ((response: Response) => void) | undefined
+    let request = 0
+    const fixture = runtimeFixture(async () => {
+      request += 1
+      if (request === 1) {
+        return new Promise<Response>(resolve => { resolveFirst = resolve })
+      }
+      return new Response(JSON.stringify({ text: '第二段' }), { status: 200 })
+    })
+    const onFinal = vi.fn()
+    const session = await createLocalEndpointProvider({
+      endpoint: 'http://127.0.0.1:39081',
+      runtime: fixture.runtime,
+      tailCaptureMs: 0,
+      segmentMinMs: 1_000,
+      segmentSilenceMs: 5_000,
+      segmentMaxMs: 1_000,
+    }).start({ onFinal })
+
+    fixture.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(48_000).fill(0.2) },
+    })
+    await vi.waitFor(() => { expect(fixture.fetchMock).toHaveBeenCalledOnce() })
+    fixture.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(48_000).fill(0.2) },
+    })
+    expect(fixture.fetchMock).toHaveBeenCalledOnce()
+
+    resolveFirst?.(new Response(JSON.stringify({ text: '第一段' }), { status: 200 }))
+    await vi.waitFor(() => { expect(fixture.fetchMock).toHaveBeenCalledTimes(2) })
+    await session.stop()
+
+    expect(onFinal.mock.calls).toEqual([['第一段'], ['第二段']])
+    for (const [, init] of fixture.fetchMock.mock.calls as [string, RequestInit][]) {
+      const audio = (init.body as FormData).get('file') as File
+      expect(audio.size).toBeLessThanOrEqual(32_044)
+    }
+  })
+
   it('reports voice activity only after sustained speech energy', async () => {
     const fixture = runtimeFixture(async () => new Response(JSON.stringify({ text: '' }), { status: 200 }))
     const onProgress = vi.fn()

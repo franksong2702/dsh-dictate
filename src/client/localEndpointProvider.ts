@@ -4,6 +4,7 @@ import {
   type AsrContextTerm,
   type AsrProvider,
   type AsrProviderCallbacks,
+  type AsrProviderError,
   type AsrProviderSession,
   type AsrProviderStartOptions,
 } from './asrProvider.ts'
@@ -12,6 +13,9 @@ export const LOCAL_ENDPOINT_MODEL = 'sensevoice'
 const TARGET_SAMPLE_RATE = 16_000
 const PROCESSOR_BUFFER_SIZE = 4096
 const DEFAULT_TAIL_CAPTURE_MS = 600
+const DEFAULT_SEGMENT_MIN_MS = 5_000
+const DEFAULT_SEGMENT_SILENCE_MS = 600
+const DEFAULT_SEGMENT_MAX_MS = 25_000
 const VAD_RMS_THRESHOLD = 0.015
 const VAD_MIN_ACTIVE_MS = 120
 
@@ -56,6 +60,10 @@ export interface LocalEndpointProviderOptions {
   readonly model?: string
   readonly runtime?: LocalEndpointRuntime
   readonly tailCaptureMs?: number
+  /** Test seams; production values keep every SenseVoice request below 30 seconds. */
+  readonly segmentMinMs?: number
+  readonly segmentSilenceMs?: number
+  readonly segmentMaxMs?: number
 }
 
 interface CaptureResources {
@@ -259,6 +267,9 @@ export function createLocalEndpointProvider(options: LocalEndpointProviderOption
   const runtime = options.runtime ?? browserRuntime()
   const model = options.model ?? LOCAL_ENDPOINT_MODEL
   const tailCaptureMs = Math.max(0, Math.min(2_000, options.tailCaptureMs ?? DEFAULT_TAIL_CAPTURE_MS))
+  const segmentMaxMs = Math.max(1_000, Math.min(29_000, options.segmentMaxMs ?? DEFAULT_SEGMENT_MAX_MS))
+  const segmentMinMs = Math.max(0, Math.min(segmentMaxMs, options.segmentMinMs ?? DEFAULT_SEGMENT_MIN_MS))
+  const segmentSilenceMs = Math.max(0, Math.min(5_000, options.segmentSilenceMs ?? DEFAULT_SEGMENT_SILENCE_MS))
   return {
     async start(callbacks: AsrProviderStartOptions = {}): Promise<AsrProviderSession> {
       const endpoint = localTranscriptionUrl(options.endpoint)
@@ -294,76 +305,33 @@ export function createLocalEndpointProvider(options: LocalEndpointProviderOption
       let source: LocalEndpointAudioNode | undefined
       let processor: LocalEndpointAudioProcessor | undefined
       let gain: LocalEndpointAudioGain | undefined
-      const chunks: Float32Array[] = []
-      let activeVoiceSamples = 0
-      let voiceDetected = false
-      try {
-        source = context.createMediaStreamSource(stream)
-        processor = context.createScriptProcessor(PROCESSOR_BUFFER_SIZE, 1, 1)
-        gain = context.createGain?.()
-        if (gain !== undefined) gain.gain.value = 0
-        processor.onaudioprocess = event => {
-          const samples = event.inputBuffer.getChannelData(0)
-          chunks.push(new Float32Array(samples))
-          if (voiceDetected) return
-          let squareSum = 0
-          for (const sample of samples) squareSum += sample * sample
-          const rms = samples.length === 0 ? 0 : Math.sqrt(squareSum / samples.length)
-          activeVoiceSamples = rms >= VAD_RMS_THRESHOLD
-            ? activeVoiceSamples + samples.length
-            : 0
-          if (activeVoiceSamples * 1_000 / context.sampleRate >= VAD_MIN_ACTIVE_MS) {
-            voiceDetected = true
-            callbacks.onProgress?.({ phase: 'voice', message: '已检测到语音' })
-          }
-        }
-        source.connect(processor)
-        if (gain !== undefined) {
-          processor.connect(gain)
-          gain.connect(context.destination)
-        } else {
-          processor.connect(context.destination)
-        }
-        await context.resume?.()
-      } catch (cause) {
-        try { source?.disconnect() } catch { /* partially connected */ }
-        try { processor?.disconnect() } catch { /* partially connected */ }
-        try { gain?.disconnect() } catch { /* partially connected */ }
-        for (const track of stream.getTracks()) {
-          try { track.stop() } catch { /* revoked tracks are already stopped */ }
-        }
-        try { await context.close?.() } catch { /* context creation already failed */ }
-        const error = asrProviderError('audio-failed', '无法开始本地录音', cause)
-        callbacks.onError?.(error)
-        throw error
-      }
-      if (Boolean(callbacks.signal?.aborted)) {
-        try { source.disconnect() } catch { /* capture is already stopped */ }
-        try { processor.disconnect() } catch { /* capture is already stopped */ }
-        try { gain?.disconnect() } catch { /* capture is already stopped */ }
-        for (const track of stream.getTracks()) track.stop()
-        try { await context.close?.() } catch { /* capture is already stopped */ }
-        throw asrProviderError('aborted', '本地转写已取消')
-      }
-
-      const resources: CaptureResources = { stream, context, source, processor, gain }
       let ended = false
       let closePromise: Promise<void> | undefined
       let cleanupPromise: Promise<void> | undefined
       const requestController = new AbortController()
+      let resources: CaptureResources | undefined
+      let segmentChunks: Float32Array[] = []
+      let segmentSamples = 0
+      let segmentVoice = false
+      let silenceSamples = 0
+      let activeVoiceSamples = 0
+      let voiceDetected = false
+      let capturedAudio = false
+      let backgroundFailure: AsrProviderError | undefined
+      let transcriptionQueue = Promise.resolve()
       let resolveEnd: (() => void) | undefined
       const endedPromise = new Promise<void>((resolve) => { resolveEnd = resolve })
 
       const cleanup = (): Promise<void> => {
         cleanupPromise ??= (async () => {
-          resources.processor.onaudioprocess = null
-          try { resources.source.disconnect() } catch { /* already disconnected */ }
-          try { resources.processor.disconnect() } catch { /* already disconnected */ }
-          try { resources.gain?.disconnect() } catch { /* already disconnected */ }
-          for (const track of resources.stream.getTracks()) {
+          if (resources !== undefined) resources.processor.onaudioprocess = null
+          try { resources?.source.disconnect() } catch { /* already disconnected */ }
+          try { resources?.processor.disconnect() } catch { /* already disconnected */ }
+          try { resources?.gain?.disconnect() } catch { /* already disconnected */ }
+          for (const track of stream.getTracks()) {
             try { track.stop() } catch { /* revoked tracks are already stopped */ }
           }
-          try { await resources.context.close?.() } catch { /* capture is already stopped */ }
+          try { await context.close?.() } catch { /* capture is already stopped */ }
         })()
         return cleanupPromise
       }
@@ -386,6 +354,132 @@ export function createLocalEndpointProvider(options: LocalEndpointProviderOption
       }
       callbacks.signal?.addEventListener('abort', abortFromSignal, { once: true })
 
+      const normalizeRequestError = (cause: unknown): AsrProviderError => {
+        if (typeof cause === 'object' && cause !== null && 'code' in cause && 'message' in cause) {
+          return cause as AsrProviderError
+        }
+        return asrProviderError(
+          'endpoint-unreachable',
+          '无法连接本地转写服务，请确认服务已启动并允许当前 DSH 地址跨域访问',
+          cause,
+        )
+      }
+
+      const transcribeSegment = async (wav: Blob): Promise<void> => {
+        if (requestController.signal.aborted || ended) return
+        const form = new FormData()
+        form.append('file', wav, 'dictation.wav')
+        form.append('model', model)
+        form.append('language', localEndpointLanguage(callbacks.lang))
+        let response: Response
+        try {
+          response = await runtime.fetch(endpoint, {
+            method: 'POST',
+            body: form,
+            signal: requestController.signal,
+          })
+        } catch (cause) {
+          if (requestController.signal.aborted || ended) return
+          throw normalizeRequestError(cause)
+        }
+        let payload: unknown
+        try {
+          payload = await response.json()
+        } catch (cause) {
+          if (requestController.signal.aborted || ended) return
+          throw asrProviderError('endpoint-response', '本地服务返回了无法解析的结果', cause)
+        }
+        if (requestController.signal.aborted || ended) return
+        if (!response.ok) {
+          const detail = detailMessage(payload)
+          throw asrProviderError(
+            'endpoint-response',
+            `本地服务返回 HTTP ${response.status}${detail === undefined ? '' : `：${detail}`}`,
+          )
+        }
+        const text = transcriptText(payload)
+        if (text === undefined) throw asrProviderError('endpoint-response', '本地服务没有返回有效文字')
+        if (text !== '') callbacks.onFinal?.(text)
+      }
+
+      const failInBackground = async (error: AsrProviderError): Promise<void> => {
+        if (backgroundFailure !== undefined || requestController.signal.aborted || ended) return
+        backgroundFailure = error
+        callbacks.onError?.(error)
+        await cleanup()
+        endOnce('error')
+      }
+
+      const enqueueSegment = (chunks: readonly Float32Array[]): void => {
+        if (chunks.length === 0 || requestController.signal.aborted || ended) return
+        capturedAudio = true
+        const wav = encodeMonoWav(resampleMonoPcm(concatenate(chunks), context.sampleRate))
+        transcriptionQueue = transcriptionQueue.then(
+          () => transcribeSegment(wav),
+        ).catch((cause: unknown) => failInBackground(normalizeRequestError(cause)))
+      }
+
+      const flushSegment = (): void => {
+        const chunks = segmentChunks
+        segmentChunks = []
+        segmentSamples = 0
+        segmentVoice = false
+        silenceSamples = 0
+        enqueueSegment(chunks)
+      }
+
+      try {
+        source = context.createMediaStreamSource(stream)
+        processor = context.createScriptProcessor(PROCESSOR_BUFFER_SIZE, 1, 1)
+        gain = context.createGain?.()
+        if (gain !== undefined) gain.gain.value = 0
+        resources = { stream, context, source, processor, gain }
+        processor.onaudioprocess = event => {
+          if (ended || requestController.signal.aborted) return
+          const samples = event.inputBuffer.getChannelData(0)
+          const copy = new Float32Array(samples)
+          segmentChunks.push(copy)
+          segmentSamples += copy.length
+          let squareSum = 0
+          for (const sample of copy) squareSum += sample * sample
+          const rms = copy.length === 0 ? 0 : Math.sqrt(squareSum / copy.length)
+          const active = rms >= VAD_RMS_THRESHOLD
+          if (active) segmentVoice = true
+          silenceSamples = active ? 0 : silenceSamples + copy.length
+          if (!voiceDetected) {
+            activeVoiceSamples = active ? activeVoiceSamples + copy.length : 0
+            if (activeVoiceSamples * 1_000 / context.sampleRate >= VAD_MIN_ACTIVE_MS) {
+              voiceDetected = true
+              callbacks.onProgress?.({ phase: 'voice', message: '已检测到语音' })
+            }
+          }
+          const durationMs = segmentSamples * 1_000 / context.sampleRate
+          const silentMs = silenceSamples * 1_000 / context.sampleRate
+          if (durationMs >= segmentMaxMs
+            || (segmentVoice && durationMs >= segmentMinMs && silentMs >= segmentSilenceMs)) {
+            flushSegment()
+          }
+        }
+        source.connect(processor)
+        if (gain !== undefined) {
+          processor.connect(gain)
+          gain.connect(context.destination)
+        } else {
+          processor.connect(context.destination)
+        }
+        await context.resume?.()
+      } catch (cause) {
+        await cleanup()
+        const error = asrProviderError('audio-failed', '无法开始本地录音', cause)
+        callbacks.onError?.(error)
+        throw error
+      }
+      if (Boolean(callbacks.signal?.aborted)) {
+        requestController.abort()
+        await cleanup()
+        throw asrProviderError('aborted', '本地转写已取消')
+      }
+
       const stopSession = async (): Promise<void> => {
         if (ended) return
         if (closePromise !== undefined) return closePromise
@@ -405,70 +499,19 @@ export function createLocalEndpointProvider(options: LocalEndpointProviderOption
             endOnce('abort')
             return
           }
-          const input = concatenate(chunks)
-          if (input.length === 0) {
+          flushSegment()
+          if (!capturedAudio) {
             callbacks.onError?.(asrProviderError('audio-failed', '没有采集到音频'))
             endOnce('error')
             return
           }
-          const wav = encodeMonoWav(resampleMonoPcm(input, resources.context.sampleRate))
-          const form = new FormData()
-          form.append('file', wav, 'dictation.wav')
-          form.append('model', model)
-          form.append('language', localEndpointLanguage(callbacks.lang))
           callbacks.onProgress?.({ phase: 'runtime', message: '正在由本地服务转写' })
-          let response: Response
-          try {
-            response = await runtime.fetch(endpoint, {
-              method: 'POST',
-              body: form,
-              signal: requestController.signal,
-            })
-          } catch (cause) {
-            if (requestController.signal.aborted) {
-              endOnce('abort')
-              return
-            }
-            callbacks.onError?.(asrProviderError(
-              'endpoint-unreachable',
-              '无法连接本地转写服务，请确认服务已启动并允许当前 DSH 地址跨域访问',
-              cause,
-            ))
-            endOnce('error')
-            return
-          }
-          let payload: unknown
-          try {
-            payload = await response.json()
-          } catch (cause) {
-            if (requestController.signal.aborted || ended) {
-              endOnce('abort')
-              return
-            }
-            callbacks.onError?.(asrProviderError('endpoint-response', '本地服务返回了无法解析的结果', cause))
-            endOnce('error')
-            return
-          }
-          if (requestController.signal.aborted || ended) {
+          await transcriptionQueue
+          if (requestController.signal.aborted) {
             endOnce('abort')
             return
           }
-          if (!response.ok) {
-            const detail = detailMessage(payload)
-            callbacks.onError?.(asrProviderError(
-              'endpoint-response',
-              `本地服务返回 HTTP ${response.status}${detail === undefined ? '' : `：${detail}`}`,
-            ))
-            endOnce('error')
-            return
-          }
-          const text = transcriptText(payload)
-          if (text === undefined) {
-            callbacks.onError?.(asrProviderError('endpoint-response', '本地服务没有返回有效文字'))
-            endOnce('error')
-            return
-          }
-          if (text !== '') callbacks.onFinal?.(text)
+          if (backgroundFailure !== undefined || ended) return
           endOnce('stop')
         })()
         return closePromise

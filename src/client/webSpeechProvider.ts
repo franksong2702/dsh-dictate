@@ -53,7 +53,6 @@ export function createWebSpeechProvider(): AsrProvider {
       let ended = false
       let started = false
       let activeTerms = options.terms ?? []
-      const emittedFinals = new Map<number, string>()
       let resolveEnd: (() => void) | undefined
       const endedPromise = new Promise<void>((resolve) => { resolveEnd = resolve })
 
@@ -74,6 +73,7 @@ export function createWebSpeechProvider(): AsrProvider {
       const begin = (usePhrases: boolean): void => {
         if (ended || requestedEnd === 'abort') return
         const next = new Recognition()
+        const emittedFinals = new Map<number, string>()
         recognition = next
         next.lang = options.lang ?? 'zh-CN'
         next.continuous = true
@@ -119,6 +119,11 @@ export function createWebSpeechProvider(): AsrProvider {
           if (restartingWithoutPhrases && requestedEnd === undefined) {
             restartingWithoutPhrases = false
             begin(false)
+            return
+          }
+          if (requestedEnd === undefined && !failed) {
+            options.onInterim?.('')
+            begin(!retriedWithoutPhrases && activeTerms.length > 0)
             return
           }
           endOnce(requestedEnd ?? (failed ? 'error' : 'ended'))
