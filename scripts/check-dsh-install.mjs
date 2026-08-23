@@ -69,6 +69,24 @@ export function installCheckExitCode(error) {
   return error instanceof CompatibilityCheckError ? 1 : 2
 }
 
+/** Build the environment used by an isolated DSH profile installation. */
+export function installCheckEnvironment(environment, allowUndeclaredCanaryVersion) {
+  return {
+    ...(allowUndeclaredCanaryVersion ? scrubCanaryEnvironment(environment) : environment),
+    // DSH profiles are pnpm workspace projects. The isolated check intentionally
+    // installs the plugin at that workspace root, so make the consent explicit.
+    npm_config_ignore_workspace_root_check: 'true',
+    ...(allowUndeclaredCanaryVersion
+      ? {
+          // DSH forwards profile plugin operations to `pnpm`. Do not let pnpm
+          // switch back to the repository's pnpm 9 packageManager declaration
+          // when this canary provisions pnpm 10 explicitly.
+          npm_config_manage_package_manager_versions: 'false',
+        }
+      : {}),
+  }
+}
+
 function configBlock(dump, id, classification = 'infrastructure') {
   const lines = dump.split(/\r?\n/u)
   const start = lines.findIndex(line => line === `- id: ${id}`)
@@ -124,15 +142,7 @@ async function main() {
   const dshVersion = requestedDshVersion === undefined || requestedDshVersion === ''
     ? supportedVersion
     : requestedDshVersion
-  const inheritedEnvironment = allowUndeclaredCanaryVersion
-    ? {
-        ...scrubCanaryEnvironment(process.env),
-        // DSH forwards profile plugin operations to `pnpm`. Do not let pnpm
-        // switch back to the repository's pnpm 9 packageManager declaration
-        // when this canary provisions pnpm 10 explicitly.
-        npm_config_manage_package_manager_versions: 'false',
-      }
-    : process.env
+  const inheritedEnvironment = installCheckEnvironment(process.env, allowUndeclaredCanaryVersion)
   const build = await runCommand('pnpm', ['run', 'build'], { cwd: REPO_ROOT, env: inheritedEnvironment })
   requireSuccess('local build', build)
 

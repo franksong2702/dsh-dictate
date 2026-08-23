@@ -19,6 +19,7 @@ import {
   CompatibilityCheckError,
   InfrastructureCheckError,
   commandFailureClassification,
+  installCheckEnvironment,
   installCheckExitCode,
 } from './check-dsh-install.mjs'
 import { resolveCommandInvocation, runBoundedCommand } from './bounded-command.mjs'
@@ -122,6 +123,21 @@ assertContract('only typed compatibility errors use exit one', installCheckExitC
 assertContract('typed infrastructure errors use exit two', installCheckExitCode(new InfrastructureCheckError('ECONNRESET')) === 2)
 assertContract('unknown checker errors fail closed as infrastructure', installCheckExitCode(new SyntaxError('Unexpected end of JSON input')) === 2)
 assertContract('network failures are recognized across stderr and stdout', commandFailureClassification({ stderr: 'npm printed a warning', stdout: 'fetch failed: ECONNRESET' }, 'compatibility') === 'infrastructure')
+
+const declaredInstallEnvironment = installCheckEnvironment({
+  PATH: '/bin',
+  GITHUB_TOKEN: 'retained-for-declared-check',
+}, false)
+assertContract('declared install checks explicitly allow the DSH profile workspace root', declaredInstallEnvironment.npm_config_ignore_workspace_root_check === 'true')
+assertContract('declared install checks retain the caller environment', declaredInstallEnvironment.GITHUB_TOKEN === 'retained-for-declared-check')
+
+const candidateInstallEnvironment = installCheckEnvironment({
+  PATH: '/bin',
+  GITHUB_TOKEN: 'must-not-reach-candidate',
+}, true)
+assertContract('candidate install checks allow the profile root without leaking credentials', candidateInstallEnvironment.npm_config_ignore_workspace_root_check === 'true'
+  && candidateInstallEnvironment.npm_config_manage_package_manager_versions === 'false'
+  && candidateInstallEnvironment.GITHUB_TOKEN === undefined)
 
 async function runCandidateFixture(exitCode) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-dictate-next-contract-'))
