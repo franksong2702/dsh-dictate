@@ -3,9 +3,39 @@ import { access } from 'node:fs/promises'
 import { delimiter, isAbsolute } from 'node:path'
 import {
   LOCAL_SERVICE_ENDPOINT,
+  parseLocalServiceStartRequest,
   type LocalServiceStage,
   type LocalServiceStatus,
 } from './local-service-contract.ts'
+
+export interface LocalServiceAutoStartConfig {
+  readonly localServiceAutoStart: boolean
+  readonly localServiceOrigin: string
+}
+
+interface LocalServiceLifecycleControl {
+  status(): Promise<Pick<LocalServiceStatus, 'phase' | 'managed'>>
+  start(origin: string): Promise<Pick<LocalServiceStatus, 'phase'>>
+  stop(): Promise<Pick<LocalServiceStatus, 'phase'>>
+}
+
+/** Reconcile one persisted auto-start choice without stopping a service when the choice is disabled. */
+export class LocalServiceAutoStartManager {
+  private previousOrigin: string | undefined
+
+  constructor(private readonly service: LocalServiceLifecycleControl) {}
+
+  async reconcile(config: LocalServiceAutoStartConfig): Promise<void> {
+    if (!config.localServiceAutoStart) return
+    const origin = parseLocalServiceStartRequest({ origin: config.localServiceOrigin }).origin
+    if (this.previousOrigin !== undefined && this.previousOrigin !== origin) {
+      const status = await this.service.status()
+      if (status.managed && status.phase !== 'stopped') await this.service.stop()
+    }
+    this.previousOrigin = origin
+    await this.service.start(origin)
+  }
+}
 
 const DEFAULT_EXECUTABLE = 'funasr-server'
 const DEFAULT_PORT = 39_081
@@ -35,6 +65,12 @@ export interface LocalServiceRuntime {
   delay(milliseconds: number): Promise<void>
   executableAvailable(file: string, env: NodeJS.ProcessEnv): Promise<boolean>
   now(): number
+}
+
+export interface LocalServiceControllerOptions {
+  readonly executable?: string
+  readonly workingDirectory?: string
+  readonly modelPath?: string
 }
 
 function processRuntime(): LocalServiceRuntime {
@@ -82,6 +118,7 @@ export class LocalServiceController {
   private readonly runtime: LocalServiceRuntime
   private readonly executable: string
   private readonly workingDirectory: string
+  private readonly modelPath: string | undefined
   private process: LocalServiceProcess | undefined
   private phase: LocalServiceStatus['phase'] = 'stopped'
   private stage: LocalServiceStage = 'idle'
@@ -90,13 +127,23 @@ export class LocalServiceController {
   private startedAt: number | undefined
   private output = ''
   private startPromise: Promise<LocalServiceStatus> | undefined
+  private readinessPromise: Promise<LocalServiceStatus> | undefined
   private stopPromise: Promise<LocalServiceStatus> | undefined
   private requestedStop = false
+  private activeOrigin: string | undefined
 
-  constructor(runtime: LocalServiceRuntime = processRuntime()) {
+  constructor(
+    runtime: LocalServiceRuntime = processRuntime(),
+    options: LocalServiceControllerOptions = {},
+  ) {
     this.runtime = runtime
-    this.executable = runtime.env.DSH_DICTATE_FUNASR_SERVER?.trim() || DEFAULT_EXECUTABLE
-    this.workingDirectory = runtime.env.DSH_DICTATE_FUNASR_WORKDIR?.trim() || runtime.cwd
+    this.executable = options.executable?.trim()
+      || runtime.env.DSH_DICTATE_FUNASR_SERVER?.trim()
+      || DEFAULT_EXECUTABLE
+    this.workingDirectory = options.workingDirectory?.trim()
+      || runtime.env.DSH_DICTATE_FUNASR_WORKDIR?.trim()
+      || runtime.cwd
+    this.modelPath = options.modelPath?.trim() || undefined
   }
 
   private snapshot(managed = this.process !== undefined): LocalServiceStatus {
@@ -190,19 +237,37 @@ export class LocalServiceController {
     return this.snapshot(false)
   }
 
-  async start(origin: string): Promise<LocalServiceStatus> {
-    if (this.startPromise !== undefined) return this.snapshot()
-    return this.startImpl(origin)
+  start(origin: string, signal?: AbortSignal): Promise<LocalServiceStatus> {
+    if (this.startPromise !== undefined) return Promise.resolve(this.snapshot(this.process !== undefined))
+    if (this.process === undefined && this.phase !== 'starting') this.requestedStop = false
+    const initialPromise = this.startImpl(origin, signal)
+    const readiness = initialPromise.then(
+      async () => { await this.readinessPromise },
+      () => undefined,
+    )
+    let tracked!: Promise<LocalServiceStatus>
+    tracked = readiness.then(() => this.snapshot(this.process !== undefined)).finally(() => {
+      if (this.startPromise === tracked) this.startPromise = undefined
+    })
+    this.startPromise = tracked
+    return initialPromise
   }
 
-  private async startImpl(origin: string): Promise<LocalServiceStatus> {
+  private async startImpl(origin: string, signal?: AbortSignal): Promise<LocalServiceStatus> {
     if (await this.healthy()) {
-      this.phase = 'running'
-      this.stage = this.process === undefined ? 'external' : 'ready'
-      this.message = this.process === undefined ? '检测到外部启动的本地服务' : '本地 SenseVoice 服务运行中'
-      this.progressPercent = null
-      return this.snapshot()
+      if (signal?.aborted || this.requestedStop) return this.stoppedSnapshot()
+      if (this.process !== undefined && this.activeOrigin !== origin) {
+        await this.stopImpl()
+        this.requestedStop = false
+      } else {
+        this.phase = 'running'
+        this.stage = this.process === undefined ? 'external' : 'ready'
+        this.message = this.process === undefined ? '检测到外部启动的本地服务' : '本地 SenseVoice 服务运行中'
+        this.progressPercent = null
+        return this.snapshot()
+      }
     }
+    if (signal?.aborted || this.requestedStop) return this.stoppedSnapshot()
     if (this.process !== undefined) {
       this.phase = 'error'
       this.stage = 'failed'
@@ -220,22 +285,31 @@ export class LocalServiceController {
       this.message = '未找到 funasr-server；请在 DSH host 环境配置 DSH_DICTATE_FUNASR_SERVER'
       return this.snapshot(false)
     }
+    if (signal?.aborted || this.requestedStop) return this.stoppedSnapshot()
 
     this.stage = 'starting-process'
     this.message = '正在启动本地服务进程'
     this.output = ''
     this.requestedStop = false
-    const child = this.runtime.spawn(this.executable, [
+    const args = [
       '--host', '127.0.0.1',
       '--port', String(DEFAULT_PORT),
       '--device', 'cpu',
-      '--model', 'sensevoice',
+      ...(this.modelPath === undefined ? ['--model', 'sensevoice'] : ['--model-path', this.modelPath]),
       '--cors-origin', origin,
-    ], {
+    ]
+    const child = this.runtime.spawn(this.executable, args, {
       cwd: this.workingDirectory,
       env: this.runtime.env,
     })
     this.process = child
+    this.activeOrigin = origin
+    const abortHandler = (): void => {
+      if (this.process !== child) return
+      this.requestedStop = true
+      child.kill('SIGTERM')
+    }
+    signal?.addEventListener('abort', abortHandler, { once: true })
     child.stdout.on('data', chunk => {
       this.output = appendOutput(this.output, chunk)
       this.updateStartupStatus()
@@ -247,6 +321,7 @@ export class LocalServiceController {
     child.on('error', (error) => {
       if (this.process !== child) return
       this.process = undefined
+      this.activeOrigin = undefined
       this.phase = 'error'
       this.stage = 'failed'
       this.message = `无法启动本地服务：${error.message}`
@@ -254,6 +329,7 @@ export class LocalServiceController {
     child.on('exit', (code, signal) => {
       if (this.process !== child) return
       this.process = undefined
+      this.activeOrigin = undefined
       if (this.requestedStop) {
         if (this.phase !== 'error') {
           this.phase = 'stopped'
@@ -270,8 +346,23 @@ export class LocalServiceController {
       }
     })
 
-    this.startPromise = this.waitUntilReady(child).finally(() => { this.startPromise = undefined })
+    const readiness = this.waitUntilReady(child)
+    let trackedReadiness!: Promise<LocalServiceStatus>
+    trackedReadiness = readiness.finally(() => {
+      signal?.removeEventListener('abort', abortHandler)
+      if (this.readinessPromise === trackedReadiness) this.readinessPromise = undefined
+    })
+    this.readinessPromise = trackedReadiness
     return this.snapshot(true)
+  }
+
+  private stoppedSnapshot(): LocalServiceStatus {
+    this.phase = 'stopped'
+    this.stage = 'idle'
+    this.message = '本地服务未启动'
+    this.progressPercent = null
+    this.startedAt = undefined
+    return this.snapshot(false)
   }
 
   private async waitUntilReady(child: LocalServiceProcess): Promise<LocalServiceStatus> {
@@ -297,6 +388,7 @@ export class LocalServiceController {
 
   async stop(): Promise<LocalServiceStatus> {
     if (this.stopPromise !== undefined) return this.stopPromise
+    this.requestedStop = true
     this.stopPromise = this.stopImpl().finally(() => { this.stopPromise = undefined })
     return this.stopPromise
   }
@@ -333,6 +425,9 @@ export class LocalServiceController {
   }
 
   async dispose(): Promise<void> {
+    this.requestedStop = true
+    if (this.process !== undefined) await this.stop()
+    if (this.startPromise !== undefined) await this.startPromise.catch(() => {})
     if (this.process !== undefined) await this.stop()
   }
 }
