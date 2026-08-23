@@ -74,6 +74,7 @@
     "build": "node -e \"fs.rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.json && tsdown",
     "test": "vitest run",
     "test:package": "pnpm run build && node scripts/verify-package.mjs",
+    "check:release-workflow": "node scripts/check-release-workflow.mjs",
     "check:dsh-install": "node scripts/check-dsh-install.mjs",
     "check:dsh-next": "node scripts/check-dsh-next.mjs",
     "check:canary-contract": "node scripts/check-dsh-next-contract.mjs && node scripts/check-canary-workflow.mjs",
