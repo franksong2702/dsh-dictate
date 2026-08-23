@@ -636,7 +636,7 @@ export function VoiceInputButton({
           hint: localMode
             ? '再次点击麦克风结束并转写'
             : fallbackNotice
-              ? '本地服务不可用，已按设置改用 Web Speech；请开始说话…'
+              ? '本地语音识别暂不可用，本次已改用浏览器语音识别；请开始说话…'
               : '请开始说话…',
           action: null,
         })
@@ -794,19 +794,15 @@ export function VoiceInputButton({
       clearPermissionStatusTimer()
       setPreparing(false)
       const detail = providerErrorMessage(error)
-      if (prefs.localFallbackPolicy === 'web-speech') {
-        fallbackToWebSpeech()
-        return
-      }
-      if (prefs.localFallbackPolicy === 'ask' && webSpeechAvailable) {
+      if (webSpeechAvailable) {
         clearMessageTimer()
         updateTranscription(sessionId, {
           phase: 'error',
           finalText: '',
           interimText: '',
-          status: '转写未完成',
-          hint: `${detail}。是否改用 Web Speech？`,
-          action: { label: '改用 Web Speech', run: fallbackToWebSpeech },
+          status: '本地识别不可用',
+          hint: `${detail}。可再次点击麦克风重试，或仅本次改用浏览器语音识别。`,
+          action: { label: '本次改用浏览器识别', run: fallbackToWebSpeech },
         })
         return
       }

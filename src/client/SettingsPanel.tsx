@@ -272,77 +272,57 @@ export function SettingsPanel({
           <p style={{ margin: '0 0 14px', color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
             识别和行为开关保存在当前浏览器中；动态词汇仅用于本次录音，不会保存。
           </p>
-          <h4 style={{ margin: '0 0 10px', fontSize: 13, lineHeight: 1.5 }}>识别方式</h4>
-          <label
-            htmlFor="dictate-transcription-provider"
-            style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
-          >
-            <span>转写方式</span>
-            <select
-              id="dictate-transcription-provider"
-              value={prefs.transcriptionProvider}
-              onChange={event => {
-                updatePrefs({
-                  transcriptionProvider: event.currentTarget.value === 'local-endpoint'
-                    ? 'local-endpoint'
-                    : 'web-speech',
-                })
-              }}
-              style={{
-                width: '100%',
-                height: 34,
-                border: '1px solid var(--dsw-alias-border-l2)',
-                borderRadius: 8,
-                padding: '0 12px',
-                background: 'var(--dsw-alias-bg-layer-3)',
-                color: 'var(--dsw-alias-label-primary)',
-                font: 'inherit',
-              }}
-            >
-              <option value="web-speech">浏览器语音识别（默认）</option>
-              <option value="local-endpoint">本地语音识别（实验性）</option>
-            </select>
-          </label>
-          {prefs.transcriptionProvider === 'local-endpoint' ? (
-            <div style={{ display: 'grid', gap: 8, marginTop: 12, maxWidth: 520 }}>
-              <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-                录音结束后由本机 SenseVoice 处理；插件会自动管理运行环境。质量优先的 Q8 模型约 253 MB，首次安装时间取决于网络速度。
-              </p>
-              <label
-                htmlFor="dictate-local-fallback"
-                style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
-              >
-                <span>本地服务不可用时</span>
-                <select
-                  id="dictate-local-fallback"
-                  value={prefs.localFallbackPolicy}
-                  onChange={event => {
-                    const value = event.currentTarget.value
-                    updatePrefs({
-                      localFallbackPolicy: value === 'ask' || value === 'web-speech'
-                        ? value
-                        : 'local-only',
-                    })
-                  }}
+          <fieldset style={{ display: 'grid', gap: 8, maxWidth: 520, margin: 0, padding: 0, border: 0 }}>
+            <legend style={{ margin: '0 0 10px', padding: 0, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+              语音识别
+            </legend>
+            {([
+              {
+                value: 'web-speech' as const,
+                title: '浏览器语音识别（默认）',
+                description: '无需安装，立即使用。识别质量和可用性取决于浏览器及网络，音频可能由浏览器提供的在线服务处理。',
+              },
+              {
+                value: 'local-endpoint' as const,
+                title: '本地语音识别（Apple Silicon，实验性）',
+                description: '录音和识别都在本机完成。首次使用需下载约 253 MB 识别模型，准备完成后可离线转写。',
+              },
+            ]).map(option => {
+              const selected = prefs.transcriptionProvider === option.value
+              return (
+                <label
+                  key={option.value}
                   style={{
-                    width: '100%',
-                    height: 34,
-                    border: '1px solid var(--dsw-alias-border-l2)',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    padding: '10px 12px',
+                    border: `1px solid ${selected ? 'var(--dsw-alias-border-l1)' : 'var(--dsw-alias-border-l2)'}`,
                     borderRadius: 8,
-                    padding: '0 12px',
-                    background: 'var(--dsw-alias-bg-layer-3)',
-                    color: 'var(--dsw-alias-label-primary)',
-                    font: 'inherit',
+                    background: selected ? 'var(--dsw-alias-bg-layer-3)' : 'transparent',
+                    cursor: 'pointer',
                   }}
                 >
-                  <option value="local-only">仅使用本地服务</option>
-                  <option value="ask">询问是否改用 Web Speech</option>
-                  <option value="web-speech">自动改用 Web Speech</option>
-                </select>
-              </label>
-              <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-                回退只发生在录音开始前的连接检查失败时；已经录制的音频转写失败后不会静默发送到其他服务。
-              </p>
+                  <input
+                    type="radio"
+                    name="dictate-transcription-provider"
+                    value={option.value}
+                    checked={selected}
+                    onChange={() => { updatePrefs({ transcriptionProvider: option.value }) }}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span style={{ display: 'grid', gap: 3 }}>
+                    <strong style={{ fontSize: 13, lineHeight: 1.5 }}>{option.title}</strong>
+                    <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+                      {option.description}
+                    </span>
+                  </span>
+                </label>
+              )
+            })}
+          </fieldset>
+          {prefs.transcriptionProvider === 'local-endpoint' ? (
+            <div style={{ display: 'grid', gap: 8, marginTop: 12, maxWidth: 520 }}>
               {localService === undefined ? (
                 <p role="status" style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
                   当前 DSH 版本无法管理本地 ASR，请更新 DSH 后重试。
@@ -366,16 +346,20 @@ export function SettingsPanel({
                         borderBottom: '1px solid var(--dsw-alias-border-l2)',
                       }}
                     >
-                      <strong style={{ fontSize: 13 }}>本地 ASR 环境</strong>
+                      <strong style={{ fontSize: 13 }}>运行状态</strong>
                       <span role={installError === '' ? 'status' : 'alert'} style={{ fontSize: 12 }}>
                         {installError !== ''
                           ? installError
-                          : installStatus?.message ?? '正在检查安装状态'}
+                          : installStatus?.phase === 'installed'
+                            ? '已安装，可以使用'
+                            : installStatus?.phase === 'not-installed'
+                              ? '尚未安装'
+                              : installStatus?.message ?? '正在检查安装状态'}
                       </span>
                       {installStatus?.phase === 'installing' && installStatus.progressPercent !== null ? (
                         <>
                           <progress
-                            aria-label="本地 ASR 安装进度"
+                            aria-label="本地语音识别安装进度"
                             max={100}
                             value={installStatus.progressPercent}
                             style={{ width: '100%' }}
@@ -403,14 +387,14 @@ export function SettingsPanel({
                             disabled={installBusy || installStatus === undefined}
                             onClick={() => { runInstallAction(localInstaller.start) }}
                           >
-                            {installStatus?.phase === 'error' ? '重新安装本地 ASR' : '安装并准备本地 ASR'}
+                            {installStatus?.phase === 'error' ? '重新安装' : '安装并准备'}
                           </button>
                         )}
                       </div>
                       <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
                         {installStatus?.available === false
                           ? `当前版本暂不支持 ${installStatus.platform} 本地语音识别；请继续使用浏览器语音识别。`
-                          : 'Apple Silicon 原生运行程序随插件提供；安装时仅下载并校验约 253 MB 的 SenseVoice Q8 模型，不修改系统 Python 或 PATH。'}
+                          : '识别模型：SenseVoice Q8。插件会自动完成安装和校验，不修改系统 Python 或 PATH。'}
                       </p>
                     </div>
                   ) : null}
@@ -429,7 +413,7 @@ export function SettingsPanel({
                               && installStatus?.phase !== 'installed')}
                           onChange={event => { updateAutoStart(event.currentTarget.checked) }}
                         />
-                        <span>随 DSH 自动启动本地服务</span>
+                        <span>随 DSH 自动启动</span>
                       </label>
                       <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
                         保存到当前 DSH profile；DSH 启动后会自动加载缓存模型。关闭只影响后续启动，不会停止当前服务。
@@ -439,8 +423,12 @@ export function SettingsPanel({
                   ) : null}
                   <span role={serviceError === '' ? 'status' : 'alert'} style={{ fontSize: 12 }}>
                     {serviceError !== ''
-                      ? `服务状态：${serviceError}`
-                      : `服务状态：${serviceStatus?.message ?? '正在检查'}`}
+                      ? `当前状态：${serviceError}`
+                      : `当前状态：${serviceStatus?.phase === 'running'
+                        ? '运行中'
+                        : serviceStatus?.phase === 'stopped'
+                          ? '未启动'
+                          : serviceStatus?.message ?? '正在检查'}`}
                   </span>
                   {serviceStatus?.phase === 'starting' && serviceStatus.progressPercent !== null ? (
                     <progress

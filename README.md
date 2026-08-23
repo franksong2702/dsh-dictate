@@ -14,7 +14,7 @@
 dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 ```
 
-安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。Web Speech 保持默认；Apple Silicon Mac 用户选择“本地语音识别”后，可以直接点击“安装并准备本地 ASR”，无需了解或配置服务地址、Python、PATH 或端口。
+安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。“浏览器语音识别”保持默认、无需安装；Apple Silicon Mac 用户也可以选择“本地语音识别”，直接点击“安装并准备”，无需了解或配置服务地址、Python、PATH 或端口。
 
 ## `v0.4.0-alpha.5` 待发布
 
@@ -22,6 +22,7 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 - 设置页可从空白状态完成运行程序校验、SenseVoice Q8 模型下载、断点续传、完整性校验、服务启动和首次模型加载。
 - 原生运行程序源码、固定依赖和第三方许可证说明进入仓库；打包校验会拒绝缺失或摘要不匹配的运行程序。
 - macOS Intel、Windows 和 Linux 继续明确显示为暂不支持本地语音识别，仍可使用默认的 Web Speech。
+- 设置页直接说明浏览器识别与本地识别的安装、网络和隐私差异；本地识别不可用时不再静默回退，只允许用户明确选择本次改用浏览器识别。
 
 ## `v0.4.0-alpha.4` 新增
 
@@ -29,7 +30,7 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 - 可直接从插件设置页启动、停止、检查本地服务，并可显式开启“随 DSH 自动启动”。
 - 兼容 DSH `0.1.1-rc.2`，并修复服务并发启动、CORS origin 变化、安装取消和断点下载边界。
 - 本地录音会确认“已检测到语音”，停止时保留约 600 ms 结尾音频，再显示清晰的转写、润色和完成状态。
-- 本地服务不可用时可选择坚持本地、询问后改用 Web Speech，或在录音开始前自动回退；已经录制的音频不会静默发送到其他服务。
+- `alpha.4` 当时允许配置本地服务不可用时的回退策略；已经录制的音频不会静默发送到其他服务。`alpha.5` 起改为每次都由用户明确选择。
 - Web Speech 仍是默认选项，现有用户无需安装本地模型或改变原有输入方式。
 
 ## 核心优势
@@ -64,7 +65,7 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 语言、中英混合识别优化、Composer 录音快捷键、模型润色和自动发送统一放在“设置 → 插件 → 插件配置 → 上下文语音输入”中，不增加独立设置 Tab。
 
 <p align="center">
-  <img src="docs/images/voice-input-settings.jpg" alt="语音输入插件配置，包含本地 SenseVoice 服务、连接测试、回退策略和识别选项" width="620">
+  <img src="docs/images/voice-input-settings.jpg" alt="语音输入插件配置，包含浏览器识别、本地识别和上下文增强选项" width="620">
 </p>
 
 ## 使用流程
@@ -79,8 +80,8 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 
 ## 配置与数据范围
 
-- “转写方式”默认为“浏览器语音识别”。Apple Silicon Mac 可以选择“本地语音识别（实验性）”；插件自动安装、启动并检查本地 SenseVoice，设置页不要求用户配置服务地址或端口。
-- “本地服务不可用时”默认选择“仅使用本地服务”。也可选择“询问是否改用 Web Speech”或显式允许自动回退。回退只发生在录音开始前的端点检查失败时；已经录制的音频如果转写失败，不会静默发送到其他服务。
+- “语音识别”默认为“浏览器语音识别”。两个选项会直接说明是否需要安装、是否依赖网络以及音频的处理位置。Apple Silicon Mac 可以选择“本地语音识别（实验性）”；插件自动安装、启动并检查本地识别环境，设置页不要求用户配置服务地址或端口。
+- 本地识别在录音开始前不可用时，插件会提示用户重试，或明确选择“本次改用浏览器识别”；不会根据历史设置自动切换。已经录制的音频如果转写失败，也不会发送到其他服务。
 - 在“设置 → 插件 → 插件配置”的“上下文语音输入”卡片中选择识别语言；设置保存在当前浏览器中。
 - 选择普通话、粤语或繁体中文时，可以启用“优化中英混合识别”。插件会从当前 Session 最近的可见用户/Assistant 文本和 Composer 草稿中提取受限的临时词汇；系统提示词、工具调用、工具结果、图片和 Assistant 推理内容不会参与提取。
 - Web Speech 模式下，浏览器支持 contextual phrases 时，插件会优先保留完整专有短语、剔除重叠碎片，并按 Composer、最近上下文和重复次数分配 2–6 的临时权重；不支持或拒绝短语增强时自动使用普通识别，不中断录音。本地 SenseVoice 端点当前不接收这批动态词汇，但模型润色仍会使用它们。
@@ -100,7 +101,7 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 
 macOS Intel、Windows 和 Linux 当前还没有随包提供原生运行程序，继续使用默认的 Web Speech。服务连接细节由插件内部管理，不在用户设置中暴露。
 
-“随 DSH 自动启动本地服务”默认关闭。开启后，选项与当前 DSH origin 会保存到当前 profile；此后 DSH host 启动时会自动启动插件管理的本地服务并加载已缓存的模型。关闭选项只影响后续启动，不会立即停止当前正在运行的服务。
+“随 DSH 自动启动”默认关闭。开启后，选项与当前 DSH origin 会保存到当前 profile；此后 DSH host 启动时会自动启动插件管理的本地服务并加载已缓存的模型。关闭选项只影响后续启动，不会立即停止当前正在运行的服务。
 
 SenseVoiceSmall 模型及原生推理依赖的来源、作者和许可证信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
