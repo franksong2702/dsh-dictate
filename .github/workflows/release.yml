@@ -1,0 +1,205 @@
+name: Publish alpha release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package version to publish (for example 0.4.0-alpha.6)
+        required: true
+        type: string
+      confirm:
+        description: Type PUBLISH to authorize this alpha release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    timeout-minutes: 45
+    environment: npm-release
+    steps:
+      - name: Check out the selected main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 9.15.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Pin npm for Trusted Publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.17.0 --no-fund --no-audit
+          test "$(npm --version)" = "11.17.0"
+          test "$(node --version)" = "v24.15.0"
+          test "$(pnpm --version)" = "9.15.9"
+
+      - name: Install dependencies from the lockfile
+        run: pnpm --config.minimum-release-age=0 install --frozen-lockfile
+
+      - name: Validate release input and target availability
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          readonly PACKAGE='dsh-dictate'
+
+          if [[ "$CONFIRM" != 'PUBLISH' ]]; then
+            echo 'The confirmation input must be exactly PUBLISH.' >&2
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-alpha\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Version must be a strict alpha semver (got: $VERSION)." >&2
+            exit 1
+          fi
+
+          package_name="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")"
+          package_version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
+          if [[ "$package_name" != "$PACKAGE" || "$package_version" != "$VERSION" ]]; then
+            echo "Input $VERSION does not match $PACKAGE@$package_version." >&2
+            exit 1
+          fi
+
+          set +e
+          git ls-remote --exit-code --refs origin "refs/tags/v${VERSION}" >/dev/null 2>&1
+          tag_status=$?
+          set -e
+          if (( tag_status == 0 )); then
+            echo "Git tag v$VERSION already exists." >&2
+            exit 1
+          fi
+          if (( tag_status != 2 )); then
+            echo "Could not verify whether Git tag v$VERSION exists (git status $tag_status)." >&2
+            exit 1
+          fi
+
+          set +e
+          release_output="$(gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" 2>&1)"
+          release_status=$?
+          set -e
+          if (( release_status == 0 )); then
+            echo "GitHub release v$VERSION already exists." >&2
+            exit 1
+          fi
+          if [[ "$release_output" != *'not found'* && "$release_output" != *'Not Found'* && "$release_output" != *404* ]]; then
+            printf '%s\n' "$release_output" >&2
+            exit 1
+          fi
+
+      - name: Run complete checks before publishing
+        run: |
+          pnpm run check:release-workflow
+          pnpm run typecheck
+          pnpm test
+          pnpm run test:package
+          cargo fmt --check --manifest-path native/local-asr/Cargo.toml
+          cargo test --locked --manifest-path native/local-asr/Cargo.toml
+          cargo clippy --locked --manifest-path native/local-asr/Cargo.toml -- -D warnings
+          file native/darwin-arm64/dsh-dictate-asr | grep -q 'Mach-O 64-bit executable arm64'
+          test -x native/darwin-arm64/dsh-dictate-asr
+          codesign --verify --strict native/darwin-arm64/dsh-dictate-asr
+
+      - name: Pack the release artifact
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          pnpm pack --pack-destination artifacts
+          test -f "artifacts/dsh-dictate-${VERSION}.tgz"
+
+      - name: Publish alpha through npm Trusted Publishing
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          readonly PACKAGE='dsh-dictate'
+          local_shasum="$(shasum "artifacts/${PACKAGE}-${VERSION}.tgz" | awk '{print $1}')"
+
+          set +e
+          npm_output="$(npm view "$PACKAGE@$VERSION" version --json 2>&1)"
+          npm_status=$?
+          set -e
+          if (( npm_status == 0 )); then
+            remote_shasum="$(npm view "$PACKAGE@$VERSION" dist.shasum --json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))')"
+            next_version="$(npm view "$PACKAGE" dist-tags.next --json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))')"
+            if [[ "$remote_shasum" != "$local_shasum" || "$next_version" != "$VERSION" ]]; then
+              echo "Existing npm version does not match this artifact and next tag; refusing unsafe resume." >&2
+              exit 1
+            fi
+            echo "npm already contains the identical $PACKAGE@$VERSION artifact; resuming after publish."
+          elif [[ "$npm_output" == *E404* || "$npm_output" == *'404 Not Found'* || "$npm_output" == *'No match found'* ]]; then
+            npm publish --tag next --provenance
+          else
+            printf '%s\n' "$npm_output" >&2
+            exit 1
+          fi
+
+      - name: Verify npm version, next tag, and artifact digest
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          readonly PACKAGE='dsh-dictate'
+          local_shasum="$(shasum "artifacts/${PACKAGE}-${VERSION}.tgz" | awk '{print $1}')"
+          for attempt in 1 2 3 4 5 6; do
+            version_json="$(npm view "$PACKAGE@$VERSION" version --json 2>/dev/null || true)"
+            next_json="$(npm view "$PACKAGE" dist-tags.next --json 2>/dev/null || true)"
+            remote_shasum_json="$(npm view "$PACKAGE@$VERSION" dist.shasum --json 2>/dev/null || true)"
+            if node -e '
+              const [expected, digest, versionRaw, nextRaw, digestRaw] = process.argv.slice(1)
+              const parse = (raw) => {
+                try { return JSON.parse(raw) }
+                catch { return raw.trim() }
+              }
+              if (parse(versionRaw) !== expected || parse(nextRaw) !== expected || parse(digestRaw) !== digest) process.exit(1)
+            ' "$VERSION" "$local_shasum" "$version_json" "$next_json" "$remote_shasum_json"; then
+              echo "npm published $PACKAGE@$VERSION with next=$VERSION and shasum=$local_shasum."
+              exit 0
+            fi
+            if (( attempt < 6 )); then
+              sleep 10
+            fi
+          done
+          echo "npm did not expose the expected version, next tag, and artifact digest after six attempts." >&2
+          exit 1
+
+      - name: Create GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh release create "v${VERSION}" \
+            "artifacts/dsh-dictate-${VERSION}.tgz" \
+            --repo "$GITHUB_REPOSITORY" \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
+            --notes 'Requires DeepSeek Harness >=0.1.1-rc.2 <0.2.0. Local ASR currently supports Apple Silicon Macs.'
