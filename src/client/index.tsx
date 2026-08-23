@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { SettingsPanel, type ModelOption } from './SettingsPanel.tsx'
 import { TranscriptionDock } from './TranscriptionDock.tsx'
-import { loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
+import { DEFAULT_LOCAL_ENDPOINT, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
 import {
   checkLocalEndpoint as checkLocalEndpointHealth,
   createLocalEndpointProvider,
@@ -124,9 +124,8 @@ function providerErrorMessage(error: unknown): string {
   return '无法启动语音输入'
 }
 
-function VoiceInputSettings({ loadModels, testEndpoint, localService }: {
+function VoiceInputSettings({ loadModels, localService }: {
   readonly loadModels: () => Promise<readonly ModelOption[]>
-  readonly testEndpoint: (endpoint: string, signal: AbortSignal) => Promise<string>
   readonly localService: {
     readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
     readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
@@ -159,7 +158,6 @@ function VoiceInputSettings({ loadModels, testEndpoint, localService }: {
   }, [loadModels])
   return <SettingsPanel
     modelOptions={modelOptions}
-    testEndpoint={testEndpoint}
     localService={localService}
   />
 }
@@ -267,7 +265,6 @@ export function apply(ctx: ClientContext): void {
     key: DICTATE_SETTINGS_NAMESPACE,
   }, () => <VoiceInputSettings
     loadModels={loadModels}
-    testEndpoint={testEndpoint}
     localService={localService}
   />))
 }
@@ -588,7 +585,7 @@ export function VoiceInputButton({
     let localMode = providerId === 'local-endpoint'
     let provider = injectedProvider ?? (providerId === 'web-speech'
       ? WEB_SPEECH_PROVIDER
-      : createLocalEndpointProvider({ endpoint: prefs.localEndpoint }))
+      : createLocalEndpointProvider({ endpoint: DEFAULT_LOCAL_ENDPOINT }))
     const controller = new AbortController()
     startAbortRef.current = controller
     finalizingRef.current = false
@@ -817,7 +814,7 @@ export function VoiceInputButton({
     }
 
     if (localMode && checkLocalEndpoint !== undefined) {
-      void checkLocalEndpoint(prefs.localEndpoint, controller.signal).then(() => {
+      void checkLocalEndpoint(DEFAULT_LOCAL_ENDPOINT, controller.signal).then(() => {
         if (controller.signal.aborted || startAbortRef.current !== controller) return
         prepareForLocalMicrophone()
         beginProvider()
