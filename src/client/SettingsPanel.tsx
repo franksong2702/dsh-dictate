@@ -24,7 +24,6 @@ const SERVICE_STAGE_LABELS: Record<LocalServiceStatus['stage'], string> = {
 function serviceDiagnostics(status: LocalServiceStatus): string {
   const values = [
     `阶段：${SERVICE_STAGE_LABELS[status.stage]}`,
-    `端点：${status.endpoint}`,
     `管理方式：${status.managed ? '插件管理' : '外部或未启动'}`,
   ]
   if (status.elapsedSeconds !== null) values.push(`已用时：${status.elapsedSeconds} 秒`)
@@ -55,7 +54,6 @@ export interface ModelOption {
 /** Read-only host inputs for the Contextual Dictation settings card. */
 export interface SettingsPanelProps {
   readonly modelOptions?: readonly ModelOption[]
-  readonly testEndpoint?: (endpoint: string, signal: AbortSignal) => Promise<string>
   readonly localService?: {
     readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
     readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
@@ -75,7 +73,6 @@ export interface SettingsPanelProps {
 /** Render the browser-local Contextual Dictation card inside Plugin configuration. */
 export function SettingsPanel({
   modelOptions = [],
-  testEndpoint,
   localService,
 }: SettingsPanelProps = {}): ReactNode {
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
@@ -90,24 +87,13 @@ export function SettingsPanel({
   const [autoStartSettings, setAutoStartSettings] = useState<LocalServiceAutoStartSettings>()
   const [autoStartBusy, setAutoStartBusy] = useState(false)
   const [autoStartError, setAutoStartError] = useState('')
-  const [endpointTestBusy, setEndpointTestBusy] = useState(false)
-  const [endpointTestResult, setEndpointTestResult] = useState<{ ok: boolean; message: string }>()
-  const endpointTestControllerRef = useRef<AbortController>()
   const autoStartControllerRef = useRef<AbortController>()
   const installControllerRef = useRef<AbortController>()
 
   useEffect(() => () => {
-    endpointTestControllerRef.current?.abort()
     autoStartControllerRef.current?.abort()
     installControllerRef.current?.abort()
   }, [])
-
-  useEffect(() => {
-    endpointTestControllerRef.current?.abort()
-    endpointTestControllerRef.current = undefined
-    setEndpointTestBusy(false)
-    setEndpointTestResult(undefined)
-  }, [prefs.localEndpoint])
 
   useEffect(() => {
     if (prefs.transcriptionProvider !== 'local-endpoint' || localService === undefined) return
@@ -200,34 +186,9 @@ export function SettingsPanel({
     setServiceError('')
     void action(controller.signal).then((status) => {
       setServiceStatus(status)
-      if (status.phase === 'running') updatePrefs({ localEndpoint: status.endpoint })
     }, (error: unknown) => {
       setServiceError(readableError(error, '本地服务操作失败'))
     }).finally(() => { setServiceBusy(false) })
-  }
-
-  const runEndpointTest = (): void => {
-    if (testEndpoint === undefined) return
-    endpointTestControllerRef.current?.abort()
-    const controller = new AbortController()
-    endpointTestControllerRef.current = controller
-    setEndpointTestBusy(true)
-    setEndpointTestResult(undefined)
-    void testEndpoint(prefs.localEndpoint, controller.signal).then((message) => {
-      if (!controller.signal.aborted) setEndpointTestResult({ ok: true, message })
-    }, (error: unknown) => {
-      if (!controller.signal.aborted) {
-        setEndpointTestResult({
-          ok: false,
-          message: readableError(error, '无法连接本地服务'),
-        })
-      }
-    }).finally(() => {
-      if (endpointTestControllerRef.current === controller) {
-        endpointTestControllerRef.current = undefined
-        setEndpointTestBusy(false)
-      }
-    })
   }
 
   const runInstallAction = (
@@ -241,7 +202,6 @@ export function SettingsPanel({
     void action(controller.signal).then((status) => {
       if (!controller.signal.aborted) {
         setInstallStatus(status)
-        if (status.phase === 'installed') updatePrefs({ localEndpoint: 'http://127.0.0.1:39081' })
       }
     }, (error: unknown) => {
       if (!controller.signal.aborted) {
@@ -312,122 +272,60 @@ export function SettingsPanel({
           <p style={{ margin: '0 0 14px', color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
             识别和行为开关保存在当前浏览器中；动态词汇仅用于本次录音，不会保存。
           </p>
-          <label
-            htmlFor="dictate-transcription-provider"
-            style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
-          >
-            <span>转写方式</span>
-            <select
-              id="dictate-transcription-provider"
-              value={prefs.transcriptionProvider}
-              onChange={event => {
-                updatePrefs({
-                  transcriptionProvider: event.currentTarget.value === 'local-endpoint'
-                    ? 'local-endpoint'
-                    : 'web-speech',
-                })
-              }}
-              style={{
-                width: '100%',
-                height: 34,
-                border: '1px solid var(--dsw-alias-border-l2)',
-                borderRadius: 8,
-                padding: '0 12px',
-                background: 'var(--dsw-alias-bg-layer-3)',
-                color: 'var(--dsw-alias-label-primary)',
-                font: 'inherit',
-              }}
-            >
-              <option value="web-speech">浏览器语音识别（默认）</option>
-              <option value="local-endpoint">本地服务端点（实验性）</option>
-            </select>
-          </label>
+          <fieldset style={{ display: 'grid', gap: 8, maxWidth: 520, margin: 0, padding: 0, border: 0 }}>
+            <legend style={{ margin: '0 0 10px', padding: 0, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+              语音识别
+            </legend>
+            {([
+              {
+                value: 'web-speech' as const,
+                title: '浏览器语音识别（默认）',
+                description: '无需安装，立即使用。识别质量和可用性取决于浏览器及网络，音频可能由浏览器提供的在线服务处理。',
+              },
+              {
+                value: 'local-endpoint' as const,
+                title: '本地语音识别（Apple Silicon，实验性）',
+                description: '录音和识别都在本机完成。首次使用需下载约 253 MB 识别模型，准备完成后可离线转写。',
+              },
+            ]).map(option => {
+              const selected = prefs.transcriptionProvider === option.value
+              return (
+                <label
+                  key={option.value}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    padding: '10px 12px',
+                    border: `1px solid ${selected ? 'var(--dsw-alias-border-l1)' : 'var(--dsw-alias-border-l2)'}`,
+                    borderRadius: 8,
+                    background: selected ? 'var(--dsw-alias-bg-layer-3)' : 'transparent',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="dictate-transcription-provider"
+                    value={option.value}
+                    checked={selected}
+                    onChange={() => { updatePrefs({ transcriptionProvider: option.value }) }}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span style={{ display: 'grid', gap: 3 }}>
+                    <strong style={{ fontSize: 13, lineHeight: 1.5 }}>{option.title}</strong>
+                    <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+                      {option.description}
+                    </span>
+                  </span>
+                </label>
+              )
+            })}
+          </fieldset>
           {prefs.transcriptionProvider === 'local-endpoint' ? (
             <div style={{ display: 'grid', gap: 8, marginTop: 12, maxWidth: 520 }}>
-              <label
-                htmlFor="dictate-local-endpoint"
-                style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
-              >
-                <span>本地服务地址</span>
-                <input
-                  id="dictate-local-endpoint"
-                  type="url"
-                  value={prefs.localEndpoint}
-                  onChange={event => { updatePrefs({ localEndpoint: event.currentTarget.value }) }}
-                  spellCheck={false}
-                  style={{
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    height: 34,
-                    border: '1px solid var(--dsw-alias-border-l2)',
-                    borderRadius: 8,
-                    padding: '0 12px',
-                    background: 'var(--dsw-alias-bg-layer-3)',
-                    color: 'var(--dsw-alias-label-primary)',
-                    font: 'inherit',
-                  }}
-                />
-              </label>
-              <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-                录音结束后发送到本机 SenseVoice 服务；模型由 DSH host 安装，不会在浏览器中运行。质量优先的 Q8 模型约 253 MB，首次安装时间取决于网络速度。
-              </p>
-              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                <button
-                  type="button"
-                  disabled={endpointTestBusy || testEndpoint === undefined}
-                  onClick={runEndpointTest}
-                >
-                  {endpointTestBusy ? '正在测试连接' : '测试连接'}
-                </button>
-                {endpointTestResult !== undefined ? (
-                  <span
-                    role={endpointTestResult.ok ? 'status' : 'alert'}
-                    style={{ fontSize: 12, color: endpointTestResult.ok
-                      ? 'var(--dsw-alias-label-secondary)'
-                      : 'var(--dsw-alias-label-primary)' }}
-                  >
-                    {endpointTestResult.message}
-                  </span>
-                ) : null}
-              </div>
-              <label
-                htmlFor="dictate-local-fallback"
-                style={{ display: 'grid', gap: 6, maxWidth: 360, fontSize: 13, fontWeight: 500 }}
-              >
-                <span>本地服务不可用时</span>
-                <select
-                  id="dictate-local-fallback"
-                  value={prefs.localFallbackPolicy}
-                  onChange={event => {
-                    const value = event.currentTarget.value
-                    updatePrefs({
-                      localFallbackPolicy: value === 'ask' || value === 'web-speech'
-                        ? value
-                        : 'local-only',
-                    })
-                  }}
-                  style={{
-                    width: '100%',
-                    height: 34,
-                    border: '1px solid var(--dsw-alias-border-l2)',
-                    borderRadius: 8,
-                    padding: '0 12px',
-                    background: 'var(--dsw-alias-bg-layer-3)',
-                    color: 'var(--dsw-alias-label-primary)',
-                    font: 'inherit',
-                  }}
-                >
-                  <option value="local-only">仅使用本地服务</option>
-                  <option value="ask">询问是否改用 Web Speech</option>
-                  <option value="web-speech">自动改用 Web Speech</option>
-                </select>
-              </label>
-              <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-                回退只发生在录音开始前的连接检查失败时；已经录制的音频转写失败后不会静默发送到其他服务。
-              </p>
               {localService === undefined ? (
                 <p role="status" style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
-                  当前 DSH host 未提供服务管理；请手动启动本地端点。
+                  当前 DSH 版本无法管理本地 ASR，请更新 DSH 后重试。
                 </p>
               ) : (
                 <div
@@ -448,16 +346,20 @@ export function SettingsPanel({
                         borderBottom: '1px solid var(--dsw-alias-border-l2)',
                       }}
                     >
-                      <strong style={{ fontSize: 13 }}>本地 ASR 环境</strong>
+                      <strong style={{ fontSize: 13 }}>运行状态</strong>
                       <span role={installError === '' ? 'status' : 'alert'} style={{ fontSize: 12 }}>
                         {installError !== ''
                           ? installError
-                          : installStatus?.message ?? '正在检查安装状态'}
+                          : installStatus?.phase === 'installed'
+                            ? '已安装，可以使用'
+                            : installStatus?.phase === 'not-installed'
+                              ? '尚未安装'
+                              : installStatus?.message ?? '正在检查安装状态'}
                       </span>
                       {installStatus?.phase === 'installing' && installStatus.progressPercent !== null ? (
                         <>
                           <progress
-                            aria-label="本地 ASR 安装进度"
+                            aria-label="本地语音识别安装进度"
                             max={100}
                             value={installStatus.progressPercent}
                             style={{ width: '100%' }}
@@ -485,14 +387,14 @@ export function SettingsPanel({
                             disabled={installBusy || installStatus === undefined}
                             onClick={() => { runInstallAction(localInstaller.start) }}
                           >
-                            {installStatus?.phase === 'error' ? '重新安装本地 ASR' : '安装并准备本地 ASR'}
+                            {installStatus?.phase === 'error' ? '重新安装' : '安装并准备'}
                           </button>
                         )}
                       </div>
                       <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
                         {installStatus?.available === false
-                          ? '当前发行包未配置公开原生安装源；请在 DSH host 中准备 funasr-server，或使用内部测试构建。'
-                          : '当前为 macOS arm64 内部测试安装源；安装目录与系统 Python 完全隔离。'}
+                          ? `当前版本暂不支持 ${installStatus.platform} 本地语音识别；请继续使用浏览器语音识别。`
+                          : '识别模型：SenseVoice Q8。插件会自动完成安装和校验，不修改系统 Python 或 PATH。'}
                       </p>
                     </div>
                   ) : null}
@@ -511,7 +413,7 @@ export function SettingsPanel({
                               && installStatus?.phase !== 'installed')}
                           onChange={event => { updateAutoStart(event.currentTarget.checked) }}
                         />
-                        <span>随 DSH 自动启动本地服务</span>
+                        <span>随 DSH 自动启动</span>
                       </label>
                       <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
                         保存到当前 DSH profile；DSH 启动后会自动加载缓存模型。关闭只影响后续启动，不会停止当前服务。
@@ -521,8 +423,12 @@ export function SettingsPanel({
                   ) : null}
                   <span role={serviceError === '' ? 'status' : 'alert'} style={{ fontSize: 12 }}>
                     {serviceError !== ''
-                      ? `服务状态：${serviceError}`
-                      : `服务状态：${serviceStatus?.message ?? '正在检查'}`}
+                      ? `当前状态：${serviceError}`
+                      : `当前状态：${serviceStatus?.phase === 'running'
+                        ? '运行中'
+                        : serviceStatus?.phase === 'stopped'
+                          ? '未启动'
+                          : serviceStatus?.message ?? '正在检查'}`}
                   </span>
                   {serviceStatus?.phase === 'starting' && serviceStatus.progressPercent !== null ? (
                     <progress
@@ -631,6 +537,9 @@ export function SettingsPanel({
               </p>
             </div>
           ) : null}
+          <h4 style={{ margin: '20px 0 10px', paddingTop: 16, borderTop: '1px solid var(--dsw-alias-border-l2)', fontSize: 13, lineHeight: 1.5 }}>
+            输入方式
+          </h4>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
               htmlFor="dictate-composer-shortcut"
@@ -648,6 +557,9 @@ export function SettingsPanel({
               光标位于 Composer 文本框时，macOS 单击右 Command，Windows/Linux 单击右 Control。按一次开始，再按一次结束；与其他按键组合时不会触发。
             </p>
           </div>
+          <h4 style={{ margin: '20px 0 10px', paddingTop: 16, borderTop: '1px solid var(--dsw-alias-border-l2)', fontSize: 13, lineHeight: 1.5 }}>
+            上下文增强
+          </h4>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
               htmlFor="dictate-model-polish"
@@ -699,6 +611,9 @@ export function SettingsPanel({
               )
             ) : null}
           </div>
+          <h4 style={{ margin: '20px 0 10px', paddingTop: 16, borderTop: '1px solid var(--dsw-alias-border-l2)', fontSize: 13, lineHeight: 1.5 }}>
+            发送方式
+          </h4>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
               htmlFor="dictate-auto-send"

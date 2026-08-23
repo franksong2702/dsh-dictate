@@ -30,6 +30,135 @@ async function waitForInstall(installer: LocalServiceInstaller): Promise<void> {
 }
 
 describe('native local ASR installer', () => {
+  it('installs a bundled runtime without an internal source environment variable', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-dictate-installer-'))
+    roots.push(root)
+    const runtimeSource = join(root, 'bundled-runtime')
+    const modelSource = join(root, 'model-source')
+    const runtimeBytes = Buffer.from('public-bundled-runtime')
+    const modelBytes = Buffer.from('sensevoice-model')
+    await Promise.all([
+      writeFile(runtimeSource, runtimeBytes),
+      writeFile(modelSource, modelBytes),
+    ])
+    const runtime: LocalServiceInstallerRuntime = {
+      env: {
+        DSH_HOME: join(root, 'dsh-home'),
+        DSH_DICTATE_NATIVE_MODEL_SOURCE: modelSource,
+      },
+      platform: 'darwin',
+      arch: 'arm64',
+      fetch: vi.fn(),
+      delay: vi.fn(async () => {}),
+    }
+    const installer = new LocalServiceInstaller(runtime, {
+      modelFilename: 'model.gguf',
+      modelSize: modelBytes.length,
+      modelSha256: digest(modelBytes),
+      modelUrl: 'https://example.invalid/model.gguf',
+      bundledRuntimeSource: runtimeSource,
+      runtimeSize: runtimeBytes.length,
+      runtimeSha256: digest(runtimeBytes),
+    })
+
+    await expect(installer.status()).resolves.toMatchObject({
+      available: true,
+      phase: 'not-installed',
+    })
+    await expect(installer.start(async () => {})).resolves.toMatchObject({ phase: 'installing' })
+    await waitForInstall(installer)
+
+    await expect(installer.status()).resolves.toMatchObject({
+      phase: 'installed',
+      stage: 'ready',
+    })
+    await expect(readFile(installer.executablePath)).resolves.toEqual(runtimeBytes)
+  })
+
+  it('rejects a bundled runtime that does not match the pinned digest', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-dictate-installer-'))
+    roots.push(root)
+    const runtimeSource = join(root, 'bundled-runtime')
+    await writeFile(runtimeSource, Buffer.from('tampered-runtime'))
+    const runtime: LocalServiceInstallerRuntime = {
+      env: { DSH_HOME: join(root, 'dsh-home') },
+      platform: 'darwin',
+      arch: 'arm64',
+      fetch: vi.fn(),
+      delay: vi.fn(async () => {}),
+    }
+    const installer = new LocalServiceInstaller(runtime, {
+      modelFilename: 'model.gguf',
+      modelSize: 1,
+      modelSha256: digest(Buffer.from('m')),
+      modelUrl: 'https://example.invalid/model.gguf',
+      bundledRuntimeSource: runtimeSource,
+      runtimeSize: 16,
+      runtimeSha256: digest(Buffer.from('expected-runtime')),
+    })
+
+    await installer.start(async () => {})
+    await waitForInstall(installer)
+
+    await expect(installer.status()).resolves.toMatchObject({
+      phase: 'error',
+      stage: 'failed',
+      message: '原生 ASR 运行程序完整性校验失败，请重新安装插件',
+    })
+  })
+
+  it('requires the installed runtime to match the current bundle and reuses the verified model on upgrade', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-dictate-installer-'))
+    roots.push(root)
+    const oldRuntimeSource = join(root, 'old-runtime')
+    const newRuntimeSource = join(root, 'new-runtime')
+    const modelSource = join(root, 'model-source')
+    const oldRuntimeBytes = Buffer.from('old-native-runtime')
+    const newRuntimeBytes = Buffer.from('new-native-runtime')
+    const modelBytes = Buffer.from('sensevoice-model')
+    await Promise.all([
+      writeFile(oldRuntimeSource, oldRuntimeBytes),
+      writeFile(newRuntimeSource, newRuntimeBytes),
+      writeFile(modelSource, modelBytes),
+    ])
+    const runtime: LocalServiceInstallerRuntime = {
+      env: {
+        DSH_HOME: join(root, 'dsh-home'),
+        DSH_DICTATE_NATIVE_MODEL_SOURCE: modelSource,
+      },
+      platform: 'darwin',
+      arch: 'arm64',
+      fetch: vi.fn(),
+      delay: vi.fn(async () => {}),
+    }
+    const artifacts = (runtimeSource: string, runtimeBytes: Buffer): InstallerArtifacts => ({
+      modelFilename: 'model.gguf',
+      modelSize: modelBytes.length,
+      modelSha256: digest(modelBytes),
+      modelUrl: 'https://example.invalid/model.gguf',
+      bundledRuntimeSource: runtimeSource,
+      runtimeSize: runtimeBytes.length,
+      runtimeSha256: digest(runtimeBytes),
+    })
+    const oldInstaller = new LocalServiceInstaller(runtime, artifacts(oldRuntimeSource, oldRuntimeBytes))
+    await oldInstaller.start(async () => {})
+    await waitForInstall(oldInstaller)
+
+    const upgradedRuntime = { ...runtime, env: { DSH_HOME: runtime.env.DSH_HOME } }
+    const upgradedInstaller = new LocalServiceInstaller(
+      upgradedRuntime,
+      artifacts(newRuntimeSource, newRuntimeBytes),
+    )
+    await expect(upgradedInstaller.status()).resolves.toMatchObject({ phase: 'not-installed' })
+    await upgradedInstaller.start(async () => {})
+    await waitForInstall(upgradedInstaller)
+
+    expect(upgradedRuntime.fetch).not.toHaveBeenCalled()
+    await expect(readFile(upgradedInstaller.executablePath)).resolves.toEqual(newRuntimeBytes)
+    await expect(readFile(upgradedInstaller.modelPath)).resolves.toEqual(modelBytes)
+    await expect(upgradedInstaller.status()).resolves.toMatchObject({ phase: 'installed' })
+  })
+
   it('copies and verifies isolated runtime/model artifacts before starting the service', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-dictate-installer-'))
     roots.push(root)

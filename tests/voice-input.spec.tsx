@@ -229,60 +229,28 @@ describe('Contextual Dictation browser plugin', () => {
     })
   })
 
-  it('keeps Web Speech as default and persists the optional local endpoint route', () => {
+  it('keeps Web Speech as default and hides local service connection details', () => {
     render(<SettingsPanel />)
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
-    const provider = screen.getByLabelText('转写方式') as HTMLSelectElement
+    const browser = screen.getByRole('radio', { name: /浏览器语音识别（默认）/ }) as HTMLInputElement
+    const local = screen.getByRole('radio', { name: /本地语音识别（Apple Silicon，实验性）/ }) as HTMLInputElement
 
-    expect(provider.value).toBe('web-speech')
+    expect(browser.checked).toBe(true)
+    expect(local.checked).toBe(false)
+    expect(screen.getByText(/无需安装，立即使用/)).not.toBeNull()
+    expect(screen.getByText(/录音和识别都在本机完成/)).not.toBeNull()
     expect(screen.queryByLabelText('本地服务地址')).toBeNull()
-    fireEvent.change(provider, { target: { value: 'local-endpoint' } })
+    expect(screen.queryByText('运行状态')).toBeNull()
+    fireEvent.click(local)
 
-    const endpoint = screen.getByLabelText('本地服务地址') as HTMLInputElement
-    expect(endpoint.value).toBe('http://127.0.0.1:39081')
-    expect(screen.getByText(/模型由 DSH host 安装/)).not.toBeNull()
-    expect((screen.getByLabelText('本地服务不可用时') as HTMLSelectElement).value).toBe('local-only')
-    fireEvent.change(screen.getByLabelText('本地服务不可用时'), { target: { value: 'ask' } })
-    expect(loadPrefs().localFallbackPolicy).toBe('ask')
-    fireEvent.change(endpoint, { target: { value: '' } })
-    expect((screen.getByLabelText('本地服务地址') as HTMLInputElement).value).toBe('')
-    fireEvent.change(endpoint, { target: { value: 'http://localhost:41000/v1' } })
-    expect(loadPrefs()).toMatchObject({
-      transcriptionProvider: 'local-endpoint',
-      localEndpoint: 'http://localhost:41000/v1',
-    })
-  })
-
-  it('tests the configured endpoint directly from plugin settings', async () => {
-    updatePrefs({ transcriptionProvider: 'local-endpoint' })
-    const testEndpoint = vi.fn(async () => '连接成功：本地 SenseVoice 服务已就绪')
-    render(<SettingsPanel testEndpoint={testEndpoint} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
-      await Promise.resolve()
-    })
-
-    expect(testEndpoint).toHaveBeenCalledWith(
-      'http://127.0.0.1:39081',
-      expect.any(AbortSignal),
-    )
-    expect(screen.getByText('连接成功：本地 SenseVoice 服务已就绪')).not.toBeNull()
-  })
-
-  it('shows a readable configured-endpoint connection failure', async () => {
-    updatePrefs({ transcriptionProvider: 'local-endpoint' })
-    const testEndpoint = vi.fn(() => Promise.reject({ message: '连接被拒绝' }))
-    render(<SettingsPanel testEndpoint={testEndpoint} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
-      await Promise.resolve()
-    })
-
-    expect(screen.getByRole('alert').textContent).toContain('连接被拒绝')
+    expect(local.checked).toBe(true)
+    expect(screen.queryByLabelText('本地服务地址')).toBeNull()
+    expect(screen.queryByRole('button', { name: '测试连接' })).toBeNull()
+    expect(screen.queryByLabelText('本地服务不可用时')).toBeNull()
+    expect(screen.getByRole('group', { name: '语音识别' })).not.toBeNull()
+    expect(screen.getByRole('heading', { name: '输入方式' })).not.toBeNull()
+    expect(screen.getByRole('heading', { name: '上下文增强' })).not.toBeNull()
+    expect(screen.getByRole('heading', { name: '发送方式' })).not.toBeNull()
   })
 
   it('checks, starts, and stops the managed local service from plugin settings', async () => {
@@ -319,7 +287,7 @@ describe('Contextual Dictation browser plugin', () => {
     await act(async () => { await Promise.resolve() })
 
     expect(status).toHaveBeenCalledWith(expect.any(AbortSignal))
-    expect(screen.getByRole('status').textContent).toContain('本地服务未启动')
+    expect(screen.getByRole('status').textContent).toContain('当前状态：未启动')
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '检查状态' }))
       await Promise.resolve()
@@ -330,13 +298,13 @@ describe('Contextual Dictation browser plugin', () => {
       await Promise.resolve()
     })
     expect(start).toHaveBeenCalledWith(expect.any(AbortSignal))
-    expect(screen.getByRole('status').textContent).toContain('本地 SenseVoice 服务运行中')
+    expect(screen.getByRole('status').textContent).toContain('当前状态：运行中')
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '停止服务' }))
       await Promise.resolve()
     })
     expect(stop).toHaveBeenCalledWith(expect.any(AbortSignal))
-    expect(screen.getByRole('status').textContent).toContain('本地服务已停止')
+    expect(screen.getByRole('status').textContent).toContain('当前状态：未启动')
   })
 
   it('offers one-click native ASR installation and shows host progress', async () => {
@@ -389,13 +357,13 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     await act(async () => { await Promise.resolve() })
 
-    expect(screen.getByText('尚未安装本地 ASR 环境')).not.toBeNull()
+    expect(screen.getByText('尚未安装')).not.toBeNull()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '安装并准备本地 ASR' }))
+      fireEvent.click(screen.getByRole('button', { name: '安装并准备' }))
       await Promise.resolve()
     })
     expect(installStart).toHaveBeenCalledWith(expect.any(AbortSignal))
-    expect((screen.getByRole('progressbar', { name: '本地 ASR 安装进度' }) as HTMLProgressElement).value).toBe(42)
+    expect((screen.getByRole('progressbar', { name: '本地语音识别安装进度' }) as HTMLProgressElement).value).toBe(42)
     expect(screen.getByText(/101.1 MB \/ 245.1 MB/)).not.toBeNull()
     expect(screen.getByRole('button', { name: '取消安装' })).not.toBeNull()
   })
@@ -430,7 +398,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     await act(async () => { await Promise.resolve() })
 
-    const toggle = screen.getByRole('checkbox', { name: '随 DSH 自动启动本地服务' }) as HTMLInputElement
+    const toggle = screen.getByRole('checkbox', { name: '随 DSH 自动启动' }) as HTMLInputElement
     expect(toggle.checked).toBe(false)
     await act(async () => {
       fireEvent.click(toggle)
@@ -734,8 +702,12 @@ describe('Contextual Dictation browser plugin', () => {
     expect(document.querySelector('[data-transcription-title]')).toBeNull()
   })
 
-  it('asks before falling back to Web Speech when the local preflight fails', async () => {
-    updatePrefs({ transcriptionProvider: 'local-endpoint', localFallbackPolicy: 'ask' })
+  it('offers a one-time browser fallback when the local preflight fails', async () => {
+    updatePrefs({
+      transcriptionProvider: 'local-endpoint',
+      localEndpoint: 'http://localhost:41000/legacy',
+      localFallbackPolicy: 'ask',
+    })
     const checkLocalEndpoint = vi.fn(() => Promise.reject({ message: '本地服务未启动' }))
     const localStart = vi.fn()
     const webStart = vi.fn((options: AsrProviderStartOptions = {}) => {
@@ -764,16 +736,20 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(localStart).not.toHaveBeenCalled()
     expect(webStart).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toContain('是否改用 Web Speech')
-    fireEvent.click(screen.getByRole('button', { name: '改用 Web Speech' }))
+    expect(checkLocalEndpoint).toHaveBeenCalledWith(
+      'http://127.0.0.1:39081',
+      expect.any(AbortSignal),
+    )
+    expect(screen.getByRole('alert').textContent).toContain('可再次点击麦克风重试')
+    fireEvent.click(screen.getByRole('button', { name: '本次改用浏览器识别' }))
     expect(webStart).toHaveBeenCalledOnce()
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在听写中')
     expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
-      '已按设置改用 Web Speech',
+      '本次已改用浏览器语音识别',
     )
   })
 
-  it('keeps a failed local preflight local-only by default', async () => {
+  it('offers the same explicit fallback for a legacy local-only preference', async () => {
     updatePrefs({ transcriptionProvider: 'local-endpoint', localFallbackPolicy: 'local-only' })
     const localStart = vi.fn()
     const webStart = vi.fn()
@@ -796,10 +772,10 @@ describe('Contextual Dictation browser plugin', () => {
     expect(localStart).not.toHaveBeenCalled()
     expect(webStart).not.toHaveBeenCalled()
     expect(screen.getByRole('alert').textContent).toContain('本地服务未启动')
-    expect(screen.queryByRole('button', { name: '改用 Web Speech' })).toBeNull()
+    expect(screen.getByRole('button', { name: '本次改用浏览器识别' })).not.toBeNull()
   })
 
-  it('automatically falls back before recording only when the user allowed it', async () => {
+  it('does not silently fall back for a legacy automatic-fallback preference', async () => {
     updatePrefs({ transcriptionProvider: 'local-endpoint', localFallbackPolicy: 'web-speech' })
     const localStart = vi.fn()
     const webStart = vi.fn((options: AsrProviderStartOptions = {}) => {
@@ -827,10 +803,13 @@ describe('Contextual Dictation browser plugin', () => {
     })
 
     expect(localStart).not.toHaveBeenCalled()
+    expect(webStart).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('可再次点击麦克风重试')
+    fireEvent.click(screen.getByRole('button', { name: '本次改用浏览器识别' }))
     expect(webStart).toHaveBeenCalledOnce()
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在听写中')
     expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
-      '已按设置改用 Web Speech',
+      '本次已改用浏览器语音识别',
     )
   })
 

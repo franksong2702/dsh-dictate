@@ -56,15 +56,25 @@ export function apply(ctx: Context, config: Config = DEFAULT_CONFIG): void {
     readonly sessions: SessionStore
   }
   const installer = new LocalServiceInstaller()
-  const nativeRuntimeSource = process.env.DSH_DICTATE_NATIVE_RUNTIME_SOURCE?.trim()
-  const localService = new LocalServiceController(undefined, nativeRuntimeSource === undefined || nativeRuntimeSource === ''
-    ? {}
-    : {
+  const localService = new LocalServiceController(undefined, installer.available
+    ? {
         executable: installer.executablePath,
         workingDirectory: installer.installRoot,
         modelPath: installer.modelPath,
-      })
-  const autoStart = new LocalServiceAutoStartManager(localService)
+      }
+    : {})
+  const startValidatedLocalService = async (origin: string, signal?: AbortSignal) => {
+    const installStatus = await installer.status()
+    if (installStatus.phase !== 'installed') {
+      throw new Error('本地语音识别需要先在插件设置中完成安装或更新')
+    }
+    return localService.start(origin, signal)
+  }
+  const autoStart = new LocalServiceAutoStartManager({
+    status: () => localService.status(),
+    start: origin => startValidatedLocalService(origin),
+    stop: () => localService.stop(),
+  })
   let currentConfig = (): Config => config
   let stopped = false
   let reconcileTail = Promise.resolve()
@@ -93,7 +103,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_CONFIG): void {
       }
       if (endpoint === 'local-service-start') {
         const request = parseLocalServiceStartRequest(payload)
-        return { ok: true, value: await localService.start(request.origin, signal) }
+        return { ok: true, value: await startValidatedLocalService(request.origin, signal) }
       }
       if (endpoint === 'local-service-stop') {
         return { ok: true, value: await localService.stop() }
@@ -106,7 +116,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_CONFIG): void {
         return {
           ok: true,
           value: await installer.start(async installSignal => {
-            await localService.start(request.origin, installSignal)
+            await startValidatedLocalService(request.origin, installSignal)
           }),
         }
       }

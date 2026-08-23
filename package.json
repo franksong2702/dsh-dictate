@@ -1,6 +1,6 @@
 {
   "name": "dsh-dictate",
-  "version": "0.4.0-alpha.4",
+  "version": "0.4.0-alpha.5",
   "description": "Context-aware voice input for DeepSeek Harness with Web Speech, local SenseVoice transcription, model polish, editable Composer drafts, and user-controlled sending",
   "keywords": [
     "deepseek-harness",
@@ -63,6 +63,8 @@
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "native/darwin-arm64/dsh-dictate-asr",
     "docs/images/voice-input-hero.jpg",
     "docs/images/composer-voice-entry.jpg",
     "docs/images/voice-input-settings.jpg",

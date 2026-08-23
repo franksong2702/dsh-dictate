@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { SettingsPanel, type ModelOption } from './SettingsPanel.tsx'
 import { TranscriptionDock } from './TranscriptionDock.tsx'
-import { loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
+import { DEFAULT_LOCAL_ENDPOINT, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
 import {
   checkLocalEndpoint as checkLocalEndpointHealth,
   createLocalEndpointProvider,
@@ -124,9 +124,8 @@ function providerErrorMessage(error: unknown): string {
   return '无法启动语音输入'
 }
 
-function VoiceInputSettings({ loadModels, testEndpoint, localService }: {
+function VoiceInputSettings({ loadModels, localService }: {
   readonly loadModels: () => Promise<readonly ModelOption[]>
-  readonly testEndpoint: (endpoint: string, signal: AbortSignal) => Promise<string>
   readonly localService: {
     readonly status: (signal: AbortSignal) => Promise<LocalServiceStatus>
     readonly start: (signal: AbortSignal) => Promise<LocalServiceStatus>
@@ -159,7 +158,6 @@ function VoiceInputSettings({ loadModels, testEndpoint, localService }: {
   }, [loadModels])
   return <SettingsPanel
     modelOptions={modelOptions}
-    testEndpoint={testEndpoint}
     localService={localService}
   />
 }
@@ -267,7 +265,6 @@ export function apply(ctx: ClientContext): void {
     key: DICTATE_SETTINGS_NAMESPACE,
   }, () => <VoiceInputSettings
     loadModels={loadModels}
-    testEndpoint={testEndpoint}
     localService={localService}
   />))
 }
@@ -588,7 +585,7 @@ export function VoiceInputButton({
     let localMode = providerId === 'local-endpoint'
     let provider = injectedProvider ?? (providerId === 'web-speech'
       ? WEB_SPEECH_PROVIDER
-      : createLocalEndpointProvider({ endpoint: prefs.localEndpoint }))
+      : createLocalEndpointProvider({ endpoint: DEFAULT_LOCAL_ENDPOINT }))
     const controller = new AbortController()
     startAbortRef.current = controller
     finalizingRef.current = false
@@ -639,7 +636,7 @@ export function VoiceInputButton({
           hint: localMode
             ? '再次点击麦克风结束并转写'
             : fallbackNotice
-              ? '本地服务不可用，已按设置改用 Web Speech；请开始说话…'
+              ? '本地语音识别暂不可用，本次已改用浏览器语音识别；请开始说话…'
               : '请开始说话…',
           action: null,
         })
@@ -797,19 +794,15 @@ export function VoiceInputButton({
       clearPermissionStatusTimer()
       setPreparing(false)
       const detail = providerErrorMessage(error)
-      if (prefs.localFallbackPolicy === 'web-speech') {
-        fallbackToWebSpeech()
-        return
-      }
-      if (prefs.localFallbackPolicy === 'ask' && webSpeechAvailable) {
+      if (webSpeechAvailable) {
         clearMessageTimer()
         updateTranscription(sessionId, {
           phase: 'error',
           finalText: '',
           interimText: '',
-          status: '转写未完成',
-          hint: `${detail}。是否改用 Web Speech？`,
-          action: { label: '改用 Web Speech', run: fallbackToWebSpeech },
+          status: '本地识别不可用',
+          hint: `${detail}。可再次点击麦克风重试，或仅本次改用浏览器语音识别。`,
+          action: { label: '本次改用浏览器识别', run: fallbackToWebSpeech },
         })
         return
       }
@@ -817,7 +810,7 @@ export function VoiceInputButton({
     }
 
     if (localMode && checkLocalEndpoint !== undefined) {
-      void checkLocalEndpoint(prefs.localEndpoint, controller.signal).then(() => {
+      void checkLocalEndpoint(DEFAULT_LOCAL_ENDPOINT, controller.signal).then(() => {
         if (controller.signal.aborted || startAbortRef.current !== controller) return
         prepareForLocalMicrophone()
         beginProvider()
