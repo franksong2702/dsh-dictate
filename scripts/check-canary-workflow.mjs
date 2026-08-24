@@ -24,6 +24,10 @@ assertContract('issue write is scoped to canary job', workflow.includes('issues:
 assertContract('latest and next are both checked', workflow.includes('channel: latest') && workflow.includes('channel: next'))
 assertContract('next deduplicates against latest', workflow.includes('dedupe_args: --dedupe-against latest'))
 assertContract('canary keeps the provisioned pnpm major active', workflow.includes('npm_config_manage_package_manager_versions: "false"'))
+assertContract('canary provisions exactly one pinned pnpm version',
+  workflow.includes('npm install --global pnpm@10.30.3')
+    && workflow.includes('test "$(pnpm --version)" = \'10.30.3\'')
+    && !workflow.includes('pnpm/action-setup@'))
 assertContract('candidate failures are retried unchanged', workflow.includes('first-canary') && workflow.includes('second-canary') && workflow.includes('continue-on-error: true'))
 assertContract('workflow fails after two failures', workflow.includes('Fail after two unsuccessful checks') && workflow.includes('run: exit 1'))
 assertContract('workflow never publishes or deploys', !/npm\s+publish|gh\s+release|dsh\s+web|deploy/iu.test(workflow))
