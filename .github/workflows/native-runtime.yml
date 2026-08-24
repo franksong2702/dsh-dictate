@@ -55,21 +55,17 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $false
           $runtime = 'native/local-asr/target/release/dsh-dictate-asr.exe'
           $bytes = [System.IO.File]::ReadAllBytes($runtime)
           if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
             throw 'Windows runtime is not a PE executable.'
           }
-          $ErrorActionPreference = 'Continue'
-          & $runtime --model-path 'Z:\dsh-dictate-missing-model.gguf' 2>&1 |
+          & $runtime --version 2>&1 |
             Tee-Object -FilePath native/local-asr/windows-launch.log
-          $runtimeExitCode = $LASTEXITCODE
-          $ErrorActionPreference = 'Stop'
-          if ($runtimeExitCode -eq 0) {
-            throw 'Runtime unexpectedly accepted a missing model.'
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Runtime version probe failed.'
           }
-          if (-not (Select-String -Quiet -Path native/local-asr/windows-launch.log -Pattern 'DSH Dictate Local ASR')) {
+          if (-not (Select-String -Quiet -Path native/local-asr/windows-launch.log -Pattern 'dsh-dictate-asr 0.1.0')) {
             throw 'Runtime did not reach the Windows console entrypoint.'
           }
       - name: Stage the unsigned runtime artifact

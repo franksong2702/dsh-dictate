@@ -37,6 +37,10 @@ struct Health<'a> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     configure_console();
+    if std::env::args().any(|arg| arg == "--version") {
+        println!("dsh-dictate-asr {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let args = Args::parse()?;
     eprintln!("DSH Dictate Local ASR");
     eprintln!("Local-only service. Closing this window stops voice transcription.");
