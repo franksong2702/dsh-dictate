@@ -36,7 +36,10 @@ struct Health<'a> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    configure_console();
     let args = Args::parse()?;
+    eprintln!("DSH Dictate Local ASR");
+    eprintln!("Local-only service. Closing this window stops voice transcription.");
     eprintln!(
         "Loading SenseVoice model from {}",
         args.model_path.display()
@@ -73,6 +76,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
     Ok(())
 }
+
+#[cfg(windows)]
+fn configure_console() {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Console::SetConsoleTitleW;
+
+    let title: Vec<u16> = std::ffi::OsStr::new("DSH Dictate Local ASR")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `title` is a valid, null-terminated UTF-16 buffer for the duration
+    // of the call. A title failure is cosmetic and does not affect the service.
+    unsafe {
+        SetConsoleTitleW(title.as_ptr());
+    }
+}
+
+#[cfg(not(windows))]
+fn configure_console() {}
 
 async fn require_origin(
     State(allowed_origin): State<HeaderValue>,

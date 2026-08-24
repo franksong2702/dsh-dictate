@@ -306,7 +306,7 @@ describe('Contextual Dictation browser plugin', () => {
     render(<SettingsPanel />)
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     const browser = screen.getByRole('radio', { name: /浏览器语音识别（默认）/ }) as HTMLInputElement
-    const local = screen.getByRole('radio', { name: /本地语音识别（Apple Silicon，实验性）/ }) as HTMLInputElement
+    const local = screen.getByRole('radio', { name: /本地语音识别（实验性）/ }) as HTMLInputElement
 
     expect(browser.checked).toBe(true)
     expect(local.checked).toBe(false)

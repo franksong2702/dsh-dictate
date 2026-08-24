@@ -36,3 +36,46 @@ jobs:
           file native/darwin-arm64/dsh-dictate-asr | grep -q 'Mach-O 64-bit executable arm64'
           test -x native/darwin-arm64/dsh-dictate-asr
           codesign --verify --strict native/darwin-arm64/dsh-dictate-asr
+
+  windows-x64:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test the native runtime on Windows x64
+        run: cargo test --release --locked --manifest-path native/local-asr/Cargo.toml
+      - name: Build the unsigned Windows x64 runtime
+        run: cargo build --release --locked --manifest-path native/local-asr/Cargo.toml
+      - name: Verify that the Windows runtime launches
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = 'native/local-asr/target/release/dsh-dictate-asr.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($runtime)
+          if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+            throw 'Windows runtime is not a PE executable.'
+          }
+          & $runtime --model-path 'Z:\dsh-dictate-missing-model.gguf' 2>&1 |
+            Tee-Object -FilePath native/local-asr/windows-launch.log
+          if ($LASTEXITCODE -eq 0) {
+            throw 'Runtime unexpectedly accepted a missing model.'
+          }
+          if (-not (Select-String -Quiet -Path native/local-asr/windows-launch.log -Pattern 'DSH Dictate Local ASR')) {
+            throw 'Runtime did not reach the Windows console entrypoint.'
+          }
+      - name: Stage the unsigned runtime artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item native/local-asr/target/release/dsh-dictate-asr.exe artifacts/dsh-dictate-asr.exe
+          Get-FileHash artifacts/dsh-dictate-asr.exe -Algorithm SHA256
+      - name: Upload the unsigned Windows x64 runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-dictate-asr-win32-x64
+          path: artifacts/dsh-dictate-asr.exe
+          if-no-files-found: error

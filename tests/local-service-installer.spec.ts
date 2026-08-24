@@ -218,10 +218,54 @@ describe('native local ASR installer', () => {
     })
   })
 
+  it('installs a Windows x64 runtime with the executable suffix', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-dictate-installer-'))
+    roots.push(root)
+    const runtimeSource = join(root, 'dsh-dictate-asr.exe')
+    const modelSource = join(root, 'model-source')
+    const runtimeBytes = Buffer.from('windows-native-runtime')
+    const modelBytes = Buffer.from('sensevoice-model')
+    await Promise.all([
+      writeFile(runtimeSource, runtimeBytes),
+      writeFile(modelSource, modelBytes),
+    ])
+    const runtime: LocalServiceInstallerRuntime = {
+      env: {
+        DSH_HOME: join(root, 'dsh-home'),
+        DSH_DICTATE_NATIVE_MODEL_SOURCE: modelSource,
+      },
+      platform: 'win32',
+      arch: 'x64',
+      fetch: vi.fn(),
+      delay: vi.fn(async () => {}),
+    }
+    const installer = new LocalServiceInstaller(runtime, {
+      modelFilename: 'model.gguf',
+      modelSize: modelBytes.length,
+      modelSha256: digest(modelBytes),
+      modelUrl: 'https://example.invalid/model.gguf',
+      runtimeFilename: 'dsh-dictate-asr.exe',
+      bundledRuntimeSource: runtimeSource,
+      runtimeSize: runtimeBytes.length,
+      runtimeSha256: digest(runtimeBytes),
+    })
+
+    await expect(installer.status()).resolves.toMatchObject({
+      available: true,
+      phase: 'not-installed',
+      platform: 'win32-x64',
+    })
+    expect(installer.executablePath.endsWith('dsh-dictate-asr.exe')).toBe(true)
+    await installer.start(async () => {})
+    await waitForInstall(installer)
+    await expect(installer.status()).resolves.toMatchObject({ phase: 'installed' })
+    await expect(readFile(installer.executablePath)).resolves.toEqual(runtimeBytes)
+  })
+
   it('reports unsupported platforms without touching an install source', async () => {
     const runtime: LocalServiceInstallerRuntime = {
       env: {},
-      platform: 'win32',
+      platform: 'linux',
       arch: 'x64',
       fetch: vi.fn(),
       delay: vi.fn(async () => {}),
@@ -229,7 +273,7 @@ describe('native local ASR installer', () => {
     const installer = new LocalServiceInstaller(runtime)
     await expect(installer.status()).resolves.toMatchObject({
       phase: 'unsupported',
-      platform: 'win32-x64',
+      platform: 'linux-x64',
     })
     await expect(installer.start(vi.fn())).resolves.toMatchObject({ phase: 'unsupported' })
   })

@@ -18,10 +18,10 @@ const MODEL_FILENAME = 'SenseVoiceSmall-Q8_0.gguf'
 const MODEL_SIZE = 252_684_608
 const MODEL_SHA256 = '6c759ee4c9748c9b3f7a5a60ca74f0f7e685fb9d45d1378fce7cfd62f59adf29'
 const MODEL_URL = 'https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/4a08b8e900b38a977e32eb08d5d0697d6e72ba04/SenseVoiceSmall-Q8_0.gguf'
-const RUNTIME_FILENAME = 'dsh-dictate-asr'
-const RUNTIME_SIZE = 4_621_600
-const RUNTIME_SHA256 = 'dab83ea0c5bfa95b8e9c94f804da7d88c9fc5657ac5ac8503554ec338d5db52f'
-const BUNDLED_RUNTIME_SOURCE = fileURLToPath(new URL('../native/darwin-arm64/dsh-dictate-asr', import.meta.url))
+const MACOS_RUNTIME_SIZE = 4_621_600
+const MACOS_RUNTIME_SHA256 = 'dab83ea0c5bfa95b8e9c94f804da7d88c9fc5657ac5ac8503554ec338d5db52f'
+const WINDOWS_RUNTIME_SIZE = 0
+const WINDOWS_RUNTIME_SHA256 = 'WINDOWS_RUNTIME_SHA256_PENDING'
 const MANIFEST_FILENAME = 'install.json'
 const COPY_CHUNK_BYTES = 1024 * 1024
 
@@ -30,19 +30,38 @@ export interface InstallerArtifacts {
   readonly modelSize: number
   readonly modelSha256: string
   readonly modelUrl: string
+  readonly runtimeFilename?: string
   readonly bundledRuntimeSource?: string
   readonly runtimeSize?: number
   readonly runtimeSha256?: string
 }
 
-const DEFAULT_ARTIFACTS: InstallerArtifacts = {
-  modelFilename: MODEL_FILENAME,
-  modelSize: MODEL_SIZE,
-  modelSha256: MODEL_SHA256,
-  modelUrl: MODEL_URL,
-  bundledRuntimeSource: BUNDLED_RUNTIME_SOURCE,
-  runtimeSize: RUNTIME_SIZE,
-  runtimeSha256: RUNTIME_SHA256,
+function defaultArtifacts(runtime: Pick<LocalServiceInstallerRuntime, 'platform' | 'arch'>): InstallerArtifacts {
+  const shared = {
+    modelFilename: MODEL_FILENAME,
+    modelSize: MODEL_SIZE,
+    modelSha256: MODEL_SHA256,
+    modelUrl: MODEL_URL,
+  }
+  if (runtime.platform === 'darwin' && runtime.arch === 'arm64') {
+    return {
+      ...shared,
+      runtimeFilename: 'dsh-dictate-asr',
+      bundledRuntimeSource: fileURLToPath(new URL('../native/darwin-arm64/dsh-dictate-asr', import.meta.url)),
+      runtimeSize: MACOS_RUNTIME_SIZE,
+      runtimeSha256: MACOS_RUNTIME_SHA256,
+    }
+  }
+  if (runtime.platform === 'win32' && runtime.arch === 'x64') {
+    return {
+      ...shared,
+      runtimeFilename: 'dsh-dictate-asr.exe',
+      bundledRuntimeSource: fileURLToPath(new URL('../native/win32-x64/dsh-dictate-asr.exe', import.meta.url)),
+      runtimeSize: WINDOWS_RUNTIME_SIZE,
+      runtimeSha256: WINDOWS_RUNTIME_SHA256,
+    }
+  }
+  return shared
 }
 
 export interface LocalServiceInstallerRuntime {
@@ -99,16 +118,19 @@ export class LocalServiceInstaller {
 
   constructor(
     runtime: LocalServiceInstallerRuntime = processRuntime(),
-    artifacts: InstallerArtifacts = DEFAULT_ARTIFACTS,
+    artifacts: InstallerArtifacts = defaultArtifacts(runtime),
   ) {
     this.runtime = runtime
     this.artifacts = artifacts
     const dshHome = resolve(runtime.env.DSH_HOME?.trim() || join(homedir(), '.dsh'))
     this.installRoot = join(dshHome, 'runtimes', 'dsh-dictate', 'local-asr')
-    this.executablePath = join(this.installRoot, 'runtime', RUNTIME_FILENAME)
+    const runtimeFilename = artifacts.runtimeFilename
+      ?? (runtime.platform === 'win32' ? 'dsh-dictate-asr.exe' : 'dsh-dictate-asr')
+    this.executablePath = join(this.installRoot, 'runtime', runtimeFilename)
     this.modelPath = join(this.installRoot, 'models', artifacts.modelFilename)
     this.manifestPath = join(this.installRoot, MANIFEST_FILENAME)
-    const supported = runtime.platform === 'darwin' && runtime.arch === 'arm64'
+    const supported = (runtime.platform === 'darwin' && runtime.arch === 'arm64')
+      || (runtime.platform === 'win32' && runtime.arch === 'x64')
     this.available = supported
     this.phase = supported ? 'not-installed' : 'unsupported'
     this.message = supported
@@ -240,7 +262,7 @@ export class LocalServiceInstaller {
         throw new Error('原生 ASR 运行程序完整性校验失败，请重新安装插件')
       }
     }
-    await chmod(runtimePartial, 0o755)
+    if (this.runtime.platform !== 'win32') await chmod(runtimePartial, 0o755)
     await rename(runtimePartial, this.executablePath)
 
     let modelSha256 = await this.validModelSha256(this.modelPath)
