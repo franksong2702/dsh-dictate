@@ -122,8 +122,8 @@ jobs:
           test -x native/darwin-arm64/dsh-dictate-asr
           codesign --verify --strict native/darwin-arm64/dsh-dictate-asr
           file native/win32-x64/dsh-dictate-asr.exe | grep -q 'PE32+ executable (console) x86-64'
-          test "$(stat -f '%z' native/win32-x64/dsh-dictate-asr.exe)" = '5067776'
-          test "$(shasum -a 256 native/win32-x64/dsh-dictate-asr.exe | awk '{print $1}')" = '31aa161a992f396ec12712a68fd881f3778d32b173c2b795918ffcc80d38a29f'
+          test "$(stat -f '%z' native/win32-x64/dsh-dictate-asr.exe)" = '5067264'
+          test "$(shasum -a 256 native/win32-x64/dsh-dictate-asr.exe | awk '{print $1}')" = '92b727dbcd7f2edcb7b96bd6e012147480b9ef408c10ed343347e9722b09f5f2'
 
       - name: Pack the release artifact
         shell: bash

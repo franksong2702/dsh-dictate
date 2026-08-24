@@ -74,7 +74,7 @@ assertContract('release notes state DSH and platform compatibility',
     && /Experimental local ASR supports Apple Silicon Macs and unsigned Windows x64/.test(workflow))
 assertContract('release verifies the bundled Windows x64 runtime',
   /file native\/win32-x64\/dsh-dictate-asr\.exe/.test(workflow)
-    && /31aa161a992f396ec12712a68fd881f3778d32b173c2b795918ffcc80d38a29f/.test(workflow))
+    && /92b727dbcd7f2edcb7b96bd6e012147480b9ef408c10ed343347e9722b09f5f2/.test(workflow))
 assertContract('package check invokes this contract', packageJson.scripts?.['check:release-workflow'] === 'node scripts/check-release-workflow.mjs')
 
 if (failures.length > 0) {

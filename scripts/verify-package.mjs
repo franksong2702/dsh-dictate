@@ -19,7 +19,7 @@ const nativeRuntimes = [
   {
     platform: 'win32-x64',
     path: 'native/win32-x64/dsh-dictate-asr.exe',
-    sha256: '31aa161a992f396ec12712a68fd881f3778d32b173c2b795918ffcc80d38a29f',
+    sha256: '92b727dbcd7f2edcb7b96bd6e012147480b9ef408c10ed343347e9722b09f5f2',
   },
 ]
 
