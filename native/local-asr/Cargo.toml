@@ -14,7 +14,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 transcribe-cpp = { version = "=0.2.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading"] }
 
 [profile.release]
 lto = "thin"

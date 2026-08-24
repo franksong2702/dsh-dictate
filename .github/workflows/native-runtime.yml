@@ -24,7 +24,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Check Rust formatting
@@ -44,7 +44,7 @@ jobs:
       RUSTFLAGS: -C target-feature=+crt-static
       TRANSCRIBE_CMAKE_ARGS: -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify bundled unsigned Windows x64 runtime
@@ -60,11 +60,19 @@ jobs:
           if ($digest -ne '31aa161a992f396ec12712a68fd881f3778d32b173c2b795918ffcc80d38a29f') {
             throw "Bundled Windows runtime SHA-256 mismatch: $digest"
           }
+          & $runtime --version 2>&1 |
+            Tee-Object -FilePath native/local-asr/windows-bundled-launch.log
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Bundled runtime version probe failed.'
+          }
+          if (-not (Select-String -Quiet -Path native/local-asr/windows-bundled-launch.log -Pattern 'dsh-dictate-asr 0.1.0')) {
+            throw 'Bundled runtime did not reach the Windows console entrypoint.'
+          }
       - name: Test the native runtime on Windows x64
         run: cargo test --release --locked --manifest-path native/local-asr/Cargo.toml
       - name: Build the unsigned Windows x64 runtime
         run: cargo build --release --locked --manifest-path native/local-asr/Cargo.toml
-      - name: Verify that the Windows runtime launches
+      - name: Verify that the freshly built Windows runtime launches
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -88,7 +96,7 @@ jobs:
           Copy-Item native/local-asr/target/release/dsh-dictate-asr.exe artifacts/dsh-dictate-asr.exe
           Get-FileHash artifacts/dsh-dictate-asr.exe -Algorithm SHA256
       - name: Upload the unsigned Windows x64 runtime
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dsh-dictate-asr-win32-x64
           path: artifacts/dsh-dictate-asr.exe

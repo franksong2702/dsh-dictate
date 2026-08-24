@@ -348,7 +348,7 @@ export class LocalServiceController {
           this.startedAt = undefined
         }
       } else {
-        if (this.runtime.platform === 'win32') {
+        if (this.runtime.platform === 'win32' && code === 0 && signal === null) {
           this.phase = 'stopped'
           this.stage = 'idle'
           this.message = '本地服务未启动'
@@ -358,7 +358,7 @@ export class LocalServiceController {
           this.phase = 'error'
           this.stage = 'failed'
           const detail = this.output.trim().split('\n').at(-1)?.slice(0, 240)
-          this.message = `本地服务意外退出（${signal ?? code ?? 'unknown'}）${detail === undefined ? '' : `：${detail}`}`
+          this.message = `本地服务意外退出（${signal ?? code ?? 'unknown'}）${detail ? `：${detail}` : ''}`
         }
       }
     })

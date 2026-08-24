@@ -240,6 +240,33 @@ describe('local SenseVoice service controller', () => {
     })
   })
 
+  it('reports an unexpected Windows runtime exit as an error', async () => {
+    const child = new FakeProcess()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValue(new Response('', { status: 503 }))
+    const testRuntime = runtime({
+      platform: 'win32',
+      fetch: fetchMock,
+      spawn: vi.fn(() => child),
+    })
+    const controller = new LocalServiceController(testRuntime, {
+      executable: 'C:\\test\\dsh-dictate-asr.exe',
+      workingDirectory: 'C:\\test',
+      modelPath: 'C:\\test\\models\\SenseVoiceSmall-Q8_0.gguf',
+    })
+
+    await controller.start('http://127.0.0.1:3081')
+    child.emit('exit', 1, null)
+
+    await expect(controller.status()).resolves.toMatchObject({
+      phase: 'error',
+      stage: 'failed',
+      managed: false,
+      message: '本地服务意外退出（1）',
+    })
+  })
+
   it('serializes concurrent starts before the first health check completes', async () => {
     let releaseInitialHealth!: (response: Response) => void
     const initialHealth = new Promise<Response>(resolve => { releaseInitialHealth = resolve })
@@ -294,7 +321,7 @@ describe('local SenseVoice service controller', () => {
       message: '正在检查 SenseVoice 模型文件',
     })
 
-    child.emit('data', '\u001b[1Amodel.pt: 42%|████▏     | 393M/936M')
+    child.emit('data', '^[[1Amodel.pt: 42%|████▏     | 393M/936M')
     await expect(controller.status()).resolves.toMatchObject({
       phase: 'starting',
       stage: 'downloading-model',
