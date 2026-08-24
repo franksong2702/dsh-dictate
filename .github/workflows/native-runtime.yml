@@ -42,6 +42,7 @@ jobs:
     timeout-minutes: 45
     env:
       RUSTFLAGS: -C target-feature=+crt-static
+      TRANSCRIBE_CMAKE_ARGS: -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
     steps:
       - uses: actions/checkout@v7
         with:
