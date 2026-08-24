@@ -25,10 +25,21 @@ const nativeRuntimes = [
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, { cwd, encoding: 'utf8' })
+  if (result.error !== undefined) {
+    throw new Error(`${command} ${args.join(' ')} could not start: ${result.error.message}`)
+  }
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed:\n${result.stderr || result.stdout}`)
   }
   return result.stdout.trim()
+}
+
+function runPnpm(args, cwd = root) {
+  const pnpmEntry = process.env.npm_execpath
+  if (pnpmEntry === undefined || pnpmEntry.length === 0) {
+    throw new Error('package verification must be invoked through pnpm')
+  }
+  return run(process.execPath, [pnpmEntry, ...args], cwd)
 }
 
 try {
@@ -43,11 +54,11 @@ try {
     }
   }
 
-  run('pnpm', ['--config.ignore-scripts=true', 'pack', '--pack-destination', work])
+  runPnpm(['--config.ignore-scripts=true', 'pack', '--pack-destination', work])
   const tarball = join(work, `${manifest.name}-${manifest.version}.tgz`)
   await access(tarball)
 
-  const entries = run('tar', ['-tzf', tarball]).split('\n').filter(Boolean)
+  const entries = run('tar', ['-tzf', tarball]).split(/\r?\n/).filter(Boolean)
   const required = [
     'package/package.json',
     'package/cordis.patch.yml',
