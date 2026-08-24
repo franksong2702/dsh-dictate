@@ -47,6 +47,19 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Verify bundled unsigned Windows x64 runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = 'native/win32-x64/dsh-dictate-asr.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($runtime)
+          if ($bytes.Length -ne 5067776 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+            throw 'Bundled Windows runtime is missing, has the wrong size, or is not a PE executable.'
+          }
+          $digest = (Get-FileHash $runtime -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne '31aa161a992f396ec12712a68fd881f3778d32b173c2b795918ffcc80d38a29f') {
+            throw "Bundled Windows runtime SHA-256 mismatch: $digest"
+          }
       - name: Test the native runtime on Windows x64
         run: cargo test --release --locked --manifest-path native/local-asr/Cargo.toml
       - name: Build the unsigned Windows x64 runtime

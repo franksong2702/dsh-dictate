@@ -8,15 +8,23 @@ the plugin:
 - `GET /v1/models`
 - `POST /v1/audio/transcriptions`
 
-Build the Apple Silicon runtime with:
+Build the runtime on its target platform with:
 
 ```sh
 cargo build --release --locked --manifest-path native/local-asr/Cargo.toml
 ```
 
-The release binary copied into `native/darwin-arm64/` must be generated from the
-checked-in lockfile. Package verification checks that the bundled executable is
-present, executable, and matches the pinned SHA-256 used by the installer.
+Windows CI also sets `RUSTFLAGS=-C target-feature=+crt-static` and
+`TRANSCRIBE_CMAKE_ARGS=-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` so the x64
+runtime does not depend on a separately installed MSVC runtime. Release binaries
+copied into `native/darwin-arm64/` and `native/win32-x64/` must be generated from
+the checked-in lockfile. Package verification checks that both bundled
+executables are present and match the SHA-256 values pinned by the installer.
+
+The Windows executable is intentionally unsigned and opens a visible console
+named `DSH Dictate Local ASR`. Closing that console stops the local service. No
+Windows service, tray application, installer, or administrator privilege is
+required by the plugin.
 
 The runtime uses the MIT-licensed
 [`transcribe.cpp`](https://github.com/handy-computer/transcribe.cpp) library.

@@ -14,7 +14,14 @@
 dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 ```
 
-安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。“浏览器语音识别”保持默认、无需安装；Apple Silicon Mac 用户也可以选择“本地语音识别”，直接点击“安装并准备”，无需了解或配置服务地址、Python、PATH 或端口。
+安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。“浏览器语音识别”保持默认、无需安装；已发布的 `v0.4.0-alpha.5` 在 Apple Silicon Mac 上提供本地识别。Windows x64 支持仍在 Draft PR 中，尚未进入 release。
+
+## Unreleased（不进入当前 release）
+
+- Windows x64 可以像 Apple Silicon 一样从插件设置页完成原生运行程序校验、SenseVoice Q8 模型下载、启动和状态检查。
+- Windows 原生运行程序不签名，也不安装系统服务或托盘程序；启动时会打开名为 `DSH Dictate Local ASR` 的可见命令行窗口，关闭窗口即停止本地识别。
+- 插件不要求管理员权限，也不修改系统 Python、PATH 或全局软件包。Windows 可能根据本机安全策略提示用户确认运行未签名程序。
+- 该支持在 Windows 真机完成模型下载与中文转写验收前保持 Draft，不包含在当前 release 中。
 
 ## `v0.4.0-alpha.7` 新增
 
@@ -28,7 +35,7 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 - Apple Silicon 原生 ASR 运行程序随插件发行包提供，不再要求公开用户配置内部安装源。
 - 设置页可从空白状态完成运行程序校验、SenseVoice Q8 模型下载、断点续传、完整性校验、服务启动和首次模型加载。
 - 原生运行程序源码、固定依赖和第三方许可证说明进入仓库；打包校验会拒绝缺失或摘要不匹配的运行程序。
-- macOS Intel、Windows 和 Linux 继续明确显示为暂不支持本地语音识别，仍可使用默认的 Web Speech。
+- macOS Intel、Windows 和 Linux 在该版本中继续明确显示为暂不支持本地语音识别，仍可使用默认的 Web Speech。
 - 设置页直接说明浏览器识别与本地识别的安装、网络和隐私差异；本地识别不可用时不再静默回退，只允许用户明确选择本次改用浏览器识别。
 
 ## `v0.4.0-alpha.4` 新增
@@ -51,7 +58,7 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 - **安全的自动发送**：只有用户明确点击结束录音才获得自动发送授权；浏览器自行结束识别时只填入 Composer。
 - **默认可检查、可编辑**：模型润色和自动发送均默认关闭。用户可以先检查转写，再决定是否发送。
 - **清晰的隐私范围**：润色不读取系统提示词、工具调用、工具结果、图片或 Assistant 推理内容；上下文最多 12 KB。
-- **无需配置 ASR Key**：默认使用 Chrome 或 Edge 的 Web Speech API；Apple Silicon 本地模式由插件自动管理 SenseVoice，用户无需了解服务地址或端口。
+- **无需配置 ASR Key**：默认使用 Chrome 或 Edge 的 Web Speech API；受支持平台上的本地模式由插件自动管理 SenseVoice，用户无需了解服务地址或端口。
 
 ## 界面
 
@@ -87,7 +94,7 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 
 ## 配置与数据范围
 
-- “语音识别”默认为“浏览器语音识别”。两个选项会直接说明是否需要安装、是否依赖网络以及音频的处理位置。Apple Silicon Mac 可以选择“本地语音识别（实验性）”；插件自动安装、启动并检查本地识别环境，设置页不要求用户配置服务地址或端口。
+- “语音识别”默认为“浏览器语音识别”。两个选项会直接说明是否需要安装、是否依赖网络以及音频的处理位置。Apple Silicon Mac 和 Windows x64 可以选择“本地语音识别（实验性）”；插件自动安装、启动并检查本地识别环境，设置页不要求用户配置服务地址或端口。Windows x64 支持目前尚未发布。
 - 本地识别在录音开始前不可用时，插件会提示用户重试，或明确选择“本次改用浏览器识别”；不会根据历史设置自动切换。已经录制的音频如果转写失败，也不会发送到其他服务。
 - 在“设置 → 插件 → 插件配置”的“上下文语音输入”卡片中选择识别语言；设置保存在当前浏览器中。
 - 选择普通话、粤语或繁体中文时，可以启用“优化中英混合识别”。插件会从当前 Session 最近的可见用户/Assistant 文本和 Composer 草稿中提取受限的临时词汇；系统提示词、工具调用、工具结果、图片和 Assistant 推理内容不会参与提取。
@@ -102,11 +109,11 @@ dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 
 ### 启动本地 SenseVoice 端点
 
-在 Apple Silicon Mac 上，可以从插件设置页完成本地 ASR 的安装、启动、停止和状态检查。约 4.4 MB 的原生运行程序随插件发行包提供；首次安装只需下载约 253 MB 的 SenseVoice Q8 模型。运行程序和模型都会经过 SHA-256 校验并安装到当前 `DSH_HOME`，不会修改系统 Python、PATH 或全局软件包。实际下载和首次加载时间取决于网络、磁盘和 CPU。设置页会如实区分准备运行程序、下载模型、完整性校验、加载模型、检查服务和已就绪等阶段，并提供取消、重试和诊断摘要。
+在 Apple Silicon Mac 和 Windows x64 上，可以从插件设置页完成本地 ASR 的安装、启动、停止和状态检查。约 4.4 MB 的 macOS 运行程序和约 4.8 MB 的 Windows 运行程序随各自支持版本的插件包提供；首次安装只需下载约 253 MB 的 SenseVoice Q8 模型。运行程序和模型都会经过 SHA-256 校验并安装到当前 `DSH_HOME`，不会修改系统 Python、PATH 或全局软件包。实际下载和首次加载时间取决于网络、磁盘和 CPU。设置页会如实区分准备运行程序、下载模型、完整性校验、加载模型、检查服务和已就绪等阶段，并提供取消、重试和诊断摘要。
 
 取消安装会终止插件管理的服务进程；再次安装时会重新校验本地缓存，并在可验证的情况下复用完整下载残片。安装完成后可以显式开启“随 DSH 自动启动”，后续启动会直接加载已经校验的本地模型。
 
-macOS Intel、Windows 和 Linux 当前还没有随包提供原生运行程序，继续使用默认的 Web Speech。服务连接细节由插件内部管理，不在用户设置中暴露。
+Windows x64 启动本地识别时会打开一个可见的 `DSH Dictate Local ASR` 命令行窗口；窗口用于明确告知本地服务正在运行，关闭窗口即停止服务。该 `.exe` 不签名，不需要管理员权限。macOS Intel、Windows ARM64 和 Linux 当前没有随包提供原生运行程序，继续使用默认的 Web Speech。服务连接细节由插件内部管理，不在用户设置中暴露。
 
 “随 DSH 自动启动”默认关闭。开启后，选项与当前 DSH origin 会保存到当前 profile；此后 DSH host 启动时会自动启动插件管理的本地服务并加载已缓存的模型。关闭选项只影响后续启动，不会立即停止当前正在运行的服务。
 
@@ -118,7 +125,7 @@ SenseVoiceSmall 模型及原生推理依赖的来源、作者和许可证信息�
 - Web Speech 默认模式需要 Chrome 或 Edge 的 Web Speech API。本地端点模式需要浏览器的麦克风与 Web Audio 能力；两种模式首次使用时都需要授予麦克风权限。
 - 本地语音识别是停止录音后的最终转写，目前提供 VAD 语音确认和约 600 ms 尾音保护，但不提供实时临时文字；本地服务由插件手动或随 DSH 自动管理。
 - 中英混合识别优化依赖浏览器及当前语音识别服务对 Web Speech contextual phrases 的支持；不支持时仍保留现有识别与模型润色流程。
-- 本地 ASR 一键安装当前只支持 macOS Apple Silicon；随包运行程序采用 ad-hoc 签名，尚未使用 Apple Developer ID 公证。其他平台继续使用 Web Speech。
+- 本地 ASR 一键安装支持 macOS Apple Silicon；Windows x64 支持仍处于未发布 Draft。macOS 随包运行程序采用 ad-hoc 签名，尚未使用 Apple Developer ID 公证；Windows `.exe` 明确保持未签名并显示命令行窗口。macOS Intel、Windows ARM64 和 Linux 继续使用 Web Speech。
 - 当前 DSH 尚未为外部插件开放自定义辅助模型请求的 Session 日志事件。插件辅助模型调用（词汇提取与润色）使用自己的受信 RPC，不会写入 DSH Session 日志；上游提供相应扩展点后应迁移到可重建的日志事件。
 
 ## 开发

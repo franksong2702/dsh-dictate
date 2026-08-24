@@ -64,6 +64,7 @@
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "native/darwin-arm64/dsh-dictate-asr",
+    "native/win32-x64/dsh-dictate-asr.exe",
     "docs/images/voice-input-hero.jpg",
     "docs/images/composer-voice-entry.jpg",
     "docs/images/voice-input-settings.jpg",
