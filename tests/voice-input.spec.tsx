@@ -130,7 +130,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(inject.mock.calls.map(call => call[0])).toEqual([
       'conversation.input.right',
-      'conversation.input.dock',
+      'conversation.input.overlay',
       'settings.plugin.item',
     ])
     expect(register.mock.calls[2]?.[0]).toMatchObject({
@@ -545,7 +545,7 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.queryByLabelText('润色模型')).toBeNull()
   })
 
-  it('starts on the first click, stops on the second, and clears completion after three seconds', () => {
+  it('starts on the first click, stops on the second, and clears completion after four seconds', () => {
     updatePrefs({ lang: 'zh-HK' })
     const setDraft = vi.fn()
     const submit = vi.fn()
@@ -572,10 +572,45 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.getByRole('status').textContent).toContain('转写结果已写入输入框，请检查后发送')
     expect(document.querySelector('[data-transcription-final]')).toBeNull()
 
-    act(() => { vi.advanceTimersByTime(2999) })
+    act(() => { vi.advanceTimersByTime(3999) })
     expect(screen.queryByRole('status')).not.toBeNull()
     act(() => { vi.advanceTimersByTime(1) })
     expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('keeps an error visible until the user starts a new recording', () => {
+    let callbacks: AsrProviderStartOptions | undefined
+    const provider: AsrProvider = {
+      start: vi.fn((options = {}) => {
+        callbacks = options
+        options.onStart?.()
+        return {
+          stop: vi.fn(async () => {}),
+          abort: vi.fn(async () => { options.onEnd?.('abort') }),
+          updateTerms: vi.fn(async () => {}),
+        }
+      }),
+    }
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'persistent-error',
+      providers: { 'web-speech': provider },
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => {
+      callbacks?.onError?.({ code: 'recognition-failed', message: '网络识别暂不可用' })
+      callbacks?.onEnd?.('error')
+    })
+    expect(screen.getByRole('alert').textContent).toContain('网络识别暂不可用')
+
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(screen.getByRole('alert').textContent).toContain('网络识别暂不可用')
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(0)
   })
 
   it('uses the local endpoint through the same Composer and explicit auto-send flow', async () => {
@@ -658,15 +693,37 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
     act(() => { vi.advanceTimersByTime(8 * 60 * 1_000) })
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe(title)
-    expect(screen.getByRole('status').textContent).toContain('将在 01:00 后自动结束并转写')
+    expect(screen.getByRole('status').textContent).toContain('01:00 后自动结束并转写')
+    expect(screen.getByRole('status').getAttribute('aria-label')).toContain('60 秒后自动结束并转写')
+    expect(document.querySelector('[data-recording-duration]')?.textContent).toBe('已持续 08:00')
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(0)
+
+    act(() => {
+      callbacks?.onInterim?.('倒计时期间的识别预览')
+      callbacks?.onFinal?.('')
+      callbacks?.onProgress?.({ phase: 'voice', message: '已检测到语音' })
+      callbacks?.onProgress?.({ phase: 'runtime', message: '识别服务处理中' })
+    })
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe(title)
+    expect(screen.getByRole('status').textContent).toContain('01:00 后自动结束并转写')
+    expect(screen.getByRole('status').textContent).not.toContain('已检测到语音')
+    expect(screen.getByRole('status').getAttribute('aria-label')).toContain('60 秒后自动结束并转写')
 
     act(() => { vi.advanceTimersByTime(59 * 1_000) })
-    expect(screen.getByRole('status').textContent).toContain('将在 00:01 后自动结束并转写')
+    expect(screen.getByRole('status').textContent).toContain('00:01 后自动结束并转写')
+    expect(screen.getByRole('status').getAttribute('aria-label')).toContain('1 秒后自动结束并转写')
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(0)
     await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve() })
 
     expect(stop).toHaveBeenCalledOnce()
     expect(setDraft).toHaveBeenCalledWith('九分钟结果')
     expect(submit).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-recording-duration]')).toBeNull()
+    expect(document.querySelector('[data-event-id="deadline-warning"]')).toBeNull()
+    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
+      '录音已结束 · 录音时长 09:00 · 已达到时长上限',
+    )
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(1)
   })
 
   it('keeps five-character titles and phase-aware auxiliary copy through local ASR', () => {
@@ -696,6 +753,10 @@ describe('Contextual Dictation browser plugin', () => {
     expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
       '再次点击麦克风结束并转写',
     )
+    expect(document.querySelector('[data-recording-duration]')?.textContent).toBe('已持续 00:00')
+
+    act(() => { vi.advanceTimersByTime(2 * 60 * 1_000 + 18 * 1_000) })
+    expect(document.querySelector('[data-recording-duration]')?.textContent).toBe('已持续 02:18')
 
     act(() => { callbacks?.onProgress?.({ phase: 'voice', message: '已检测到语音' }) })
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在录音中')
@@ -709,8 +770,13 @@ describe('Contextual Dictation browser plugin', () => {
 
     fireEvent.click(button)
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在转写中')
+    expect(document.querySelector('[data-recording-duration]')).toBeNull()
+    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
+      '录音已结束 · 录音时长 02:18 · 用户主动结束',
+    )
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(1)
     expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
-      '正在保留结尾语音',
+      '正在处理录音，请稍候',
     )
 
     act(() => { callbacks?.onProgress?.({ phase: 'runtime', message: '正在由本地服务转写' }) })
@@ -718,7 +784,7 @@ describe('Contextual Dictation browser plugin', () => {
     expect(title).toBe('正在转写中')
     expect(Array.from(title)).toHaveLength(5)
     expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
-      '本地服务正在识别语音，请稍候',
+      '正在生成转写结果，请稍候',
     )
   })
 
@@ -796,6 +862,46 @@ describe('Contextual Dictation browser plugin', () => {
     expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
       '本次已改用浏览器语音识别',
     )
+  })
+
+  it('retries local preflight on the first microphone click after a failure', async () => {
+    updatePrefs({ transcriptionProvider: 'local-endpoint', localFallbackPolicy: 'ask' })
+    const checkLocalEndpoint = vi.fn()
+      .mockRejectedValueOnce({ message: '本地服务未启动' })
+      .mockResolvedValueOnce(undefined)
+    const localStart = vi.fn((options: AsrProviderStartOptions = {}) => {
+      options.onStart?.()
+      return {
+        stop: vi.fn(async () => {}),
+        abort: vi.fn(async () => { options.onEnd?.('abort') }),
+        updateTerms: vi.fn(async () => {}),
+      }
+    })
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'local-preflight-retry',
+      checkLocalEndpoint,
+      providers: {
+        'local-endpoint': { start: localStart },
+        'web-speech': { start: vi.fn() },
+      },
+    }))
+
+    const microphone = screen.getByRole('button', { name: '语音输入' })
+    await act(async () => {
+      fireEvent.click(microphone)
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('alert').textContent).toContain('可再次点击麦克风重试')
+
+    await act(async () => {
+      fireEvent.click(microphone)
+      await Promise.resolve()
+    })
+    expect(checkLocalEndpoint).toHaveBeenCalledTimes(2)
+    expect(localStart).toHaveBeenCalledOnce()
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在录音中')
   })
 
   it('offers the same explicit fallback for a legacy local-only preference', async () => {
@@ -1110,14 +1216,15 @@ describe('Contextual Dictation browser plugin', () => {
     expect(setDraft).toHaveBeenCalledWith('普通识别')
   })
 
-  it('retries once without phrase bias when the recognition service rejects phrases', async () => {
+  it('silently falls back from phrase bias and ignores stale capability errors', async () => {
     window.SpeechRecognitionPhrase = FakeSpeechRecognitionPhrase
     updatePrefs({ lang: 'zh-CN', mixedLanguageOptimizationEnabled: true })
     const loadContextTerms = vi.fn(() => Promise.resolve([
       { text: 'DeepSeek Harness', boost: 5, source: 'session' as const },
     ]))
+    const setDraft = vi.fn()
     render(voiceSurfaces({
-      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      inputActions: { setDraft, submit: vi.fn() },
       input: { draft: '' },
       sessionId: 'session-1',
       loadContextTerms,
@@ -1136,6 +1243,35 @@ describe('Contextual Dictation browser plugin', () => {
     expect(second?.startCalls).toBe(1)
     expect(second?.phrases).toEqual([])
     expect(loadContextTerms).toHaveBeenCalledOnce()
+
+    act(() => {
+      first?.onerror?.({ error: 'phrases-not-supported', message: '' } as WebkitSpeechRecognitionErrorEvent)
+      second?.onerror?.({ error: 'phrases-not-supported', message: '' } as WebkitSpeechRecognitionErrorEvent)
+      second?.onstart?.()
+    })
+    expect(document.querySelector('[data-event-id="error"]')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在听写中')
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => { second?.finishWith('普通识别仍然可用') })
+    expect(setDraft).toHaveBeenCalledWith('普通识别仍然可用')
+  })
+
+  it('still reports Web Speech errors that are not phrase capability warnings', () => {
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'web-speech-error',
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => {
+      recognition?.onerror?.({ error: 'network', message: '' } as WebkitSpeechRecognitionErrorEvent)
+    })
+
+    expect(screen.getByRole('alert').textContent).toContain('语音识别失败：network')
   })
 
   it('continues one logical dictation across ordinary Web Speech endings', () => {
@@ -1260,8 +1396,10 @@ describe('Contextual Dictation browser plugin', () => {
     ) })
 
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在听写中')
-    expect(screen.getByRole('status').textContent).toContain('今天晚上')
-    expect(screen.getByRole('status').textContent).toContain('天气不错')
+    const preview = document.querySelector('[data-transcription-preview]')
+    expect(preview?.textContent).toContain('实时识别（非最终）：')
+    expect(preview?.textContent).toContain('今天晚上')
+    expect(preview?.textContent).toContain('天气不错')
     expect(setDraft).not.toHaveBeenCalled()
     expect(submit).not.toHaveBeenCalled()
   })
@@ -1331,7 +1469,7 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.getByRole('status').textContent).toContain('正在听写中')
   })
 
-  it('shows a provisional transcript and Composer destination while polishing', async () => {
+  it('does not retain a one-second finalizing stage before showing the polishing preview', async () => {
     const selectedModel = encodeModelReference({ provider: 'deepseek', model: 'chat' })
     updatePrefs({ modelPolishEnabled: true, selectedModel })
     const setDraft = vi.fn()
@@ -1348,13 +1486,20 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
     const recognition = FakeRecognition.instances[0]
     act(() => { recognition?.onstart?.() })
+    act(() => { vi.advanceTimersByTime(2 * 60 * 1_000 + 3 * 1_000) })
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => { vi.advanceTimersByTime(1_000) })
     act(() => { recognition?.finishWith('深度求索哈尼斯') })
 
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在润色中')
-    expect(screen.getByRole('status').textContent).toContain('初步识别（非最终）：')
-    expect(screen.getByRole('status').textContent).toContain('深度求索哈尼斯')
-    expect(screen.getByRole('status').textContent).toContain('润色后将写入输入框')
+    expect(document.querySelector('[data-recording-duration]')).toBeNull()
+    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
+      '录音已结束 · 录音时长 02:03 · 用户主动结束',
+    )
+    expect(document.querySelector('[data-event-id="transcription-complete"]')).toBeNull()
+    expect(document.querySelector('[data-transcription-preview]')?.textContent).toContain('初步转写（非最终）：')
+    expect(document.querySelector('[data-transcription-preview]')?.textContent).toContain('深度求索哈尼斯')
+    expect(screen.getByRole('status').textContent).toContain('初步转写不是最终结果；完成后将写入输入框')
     expect(document.querySelector('[data-transcription-provisional]')).not.toBeNull()
     expect(polish).toHaveBeenCalledWith({
       sessionId: 'session-1',
@@ -1364,11 +1509,43 @@ describe('Contextual Dictation browser plugin', () => {
       terms: [],
     }, expect.any(AbortSignal))
 
+    act(() => { vi.advanceTimersByTime(5_000) })
+    expect(document.querySelector('[data-recording-duration]')).toBeNull()
+
     await act(async () => { resolvePolish?.('DeepSeek Harness') })
     expect(setDraft).toHaveBeenCalledWith('前文 DeepSeek Harness')
     expect(submit).not.toHaveBeenCalled()
     expect(screen.getByRole('status').textContent).toContain('已润色完成')
     expect(screen.getByRole('status').textContent).toContain('最终结果已写入输入框')
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(1)
+  })
+
+  it('retains a completed transcription milestone only after a perceptible wait', () => {
+    const selectedModel = encodeModelReference({ provider: 'deepseek', model: 'chat' })
+    updatePrefs({ modelPolishEnabled: true, selectedModel })
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'perceptible-transcription-stage',
+      polish: vi.fn(() => new Promise<string>(() => {})),
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.onstart?.() })
+    act(() => { vi.advanceTimersByTime(24_000) })
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => { vi.advanceTimersByTime(3_000) })
+    act(() => { recognition?.finishWith('三秒后的初步转写') })
+
+    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
+      '录音已结束 · 录音时长 00:24 · 用户主动结束',
+    )
+    expect(document.querySelector('[data-event-id="transcription-complete"]')?.textContent).toBe(
+      '转写已完成 · 已生成初步转写',
+    )
+    expect(document.querySelector('[data-event-id="polishing"]')).toBeNull()
+    expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在润色中')
   })
 
   it('starts polishing immediately when background terms are still pending', () => {
@@ -1452,9 +1629,9 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(button)
     act(() => { recognition?.finishWith('原始转写') })
 
-    expect(screen.getByRole('status').textContent).toContain('初步识别（非最终）：')
-    expect(screen.getByRole('status').textContent).toContain('原始转写')
-    expect(screen.getByRole('status').textContent).toContain('润色后将直接发送')
+    expect(document.querySelector('[data-transcription-preview]')?.textContent).toContain('初步转写（非最终）：')
+    expect(document.querySelector('[data-transcription-preview]')?.textContent).toContain('原始转写')
+    expect(screen.getByRole('status').textContent).toContain('初步转写不是最终结果；完成后将直接发送')
     await act(async () => { resolvePolish?.('润色结果') })
 
     expect(setDraft).toHaveBeenCalledWith('润色结果')

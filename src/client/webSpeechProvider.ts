@@ -105,10 +105,13 @@ export function createWebSpeechProvider(): AsrProvider {
           options.onInterim?.(interim.join(' '))
         }
         next.onerror = (event) => {
+          if (recognition !== next) return
           if (event.error === 'aborted' || event.error === 'no-speech') return
-          if (event.error === 'phrases-not-supported' && phraseBiasActive && !retriedWithoutPhrases) {
-            retriedWithoutPhrases = true
-            restartingWithoutPhrases = true
+          if (event.error === 'phrases-not-supported') {
+            if (phraseBiasActive && !retriedWithoutPhrases) {
+              retriedWithoutPhrases = true
+              restartingWithoutPhrases = true
+            }
             return
           }
           fail(options, event.error, event)
