@@ -168,7 +168,7 @@ describe('TranscriptionDock', () => {
     expect(preview.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
   })
 
-  it('anchors a translucent clipped viewport above the Composer without taking layout space', () => {
+  it('anchors an opaque clipped viewport above the Composer without taking layout space', () => {
     updateTranscription('dock-render', { phase: 'listening' })
 
     render(<TranscriptionDock sessionId="dock-render" />)
@@ -188,8 +188,13 @@ describe('TranscriptionDock', () => {
     expect(dock.style.zIndex).toBe('40')
     expect(Number(dock.style.zIndex)).toBeLessThan(100)
     expect(dock.style.pointerEvents).toBe('auto')
-    expect(dock.style.background).toContain('color-mix')
-    expect(dock.style.backdropFilter).toContain('blur')
+    expect(dock.style.backgroundColor).toBe('var(--dsw-alias-bg-layer-2)')
+    expect(dock.getAttribute('style')).not.toContain('color-mix')
+    expect(dock.getAttribute('style')).not.toContain('backdrop-filter')
+    const current = document.querySelector('[data-transcription-current]') as HTMLElement
+    expect(current.style.backgroundColor).toBe('var(--dsw-alias-bg-layer-2)')
+    expect(current.getAttribute('style')).not.toContain('color-mix')
+    expect(current.getAttribute('style')).not.toContain('backdrop-filter')
   })
 
   it('slides the completed timeline down without fading it', () => {
