@@ -720,10 +720,8 @@ describe('Contextual Dictation browser plugin', () => {
     expect(submit).not.toHaveBeenCalled()
     expect(document.querySelector('[data-recording-duration]')).toBeNull()
     expect(document.querySelector('[data-event-id="deadline-warning"]')).toBeNull()
-    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
-      '录音已结束 · 录音时长 09:00 · 已达到时长上限',
-    )
-    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(1)
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(0)
   })
 
   it('keeps five-character titles and phase-aware auxiliary copy through local ASR', () => {
@@ -771,10 +769,8 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(button)
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在转写中')
     expect(document.querySelector('[data-recording-duration]')).toBeNull()
-    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
-      '录音已结束 · 录音时长 02:18 · 用户主动结束',
-    )
-    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(1)
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(0)
     expect(document.querySelector('[data-transcription-auxiliary]')?.textContent).toContain(
       '正在处理录音，请稍候',
     )
@@ -1493,9 +1489,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在润色中')
     expect(document.querySelector('[data-recording-duration]')).toBeNull()
-    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
-      '录音已结束 · 录音时长 02:03 · 用户主动结束',
-    )
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
     expect(document.querySelector('[data-event-id="transcription-complete"]')).toBeNull()
     expect(document.querySelector('[data-transcription-preview]')?.textContent).toContain('初步转写（非最终）：')
     expect(document.querySelector('[data-transcription-preview]')?.textContent).toContain('深度求索哈尼斯')
@@ -1517,10 +1511,10 @@ describe('Contextual Dictation browser plugin', () => {
     expect(submit).not.toHaveBeenCalled()
     expect(screen.getByRole('status').textContent).toContain('已润色完成')
     expect(screen.getByRole('status').textContent).toContain('最终结果已写入输入框')
-    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(0)
   })
 
-  it('retains a completed transcription milestone only after a perceptible wait', () => {
+  it('keeps perceptible internal milestones out of the user interface', () => {
     const selectedModel = encodeModelReference({ provider: 'deepseek', model: 'chat' })
     updatePrefs({ modelPolishEnabled: true, selectedModel })
     render(voiceSurfaces({
@@ -1538,12 +1532,9 @@ describe('Contextual Dictation browser plugin', () => {
     act(() => { vi.advanceTimersByTime(3_000) })
     act(() => { recognition?.finishWith('三秒后的初步转写') })
 
-    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
-      '录音已结束 · 录音时长 00:24 · 用户主动结束',
-    )
-    expect(document.querySelector('[data-event-id="transcription-complete"]')?.textContent).toBe(
-      '转写已完成 · 已生成初步转写',
-    )
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
+    expect(document.querySelector('[data-event-id="recording-stop"]')).toBeNull()
+    expect(document.querySelector('[data-event-id="transcription-complete"]')).toBeNull()
     expect(document.querySelector('[data-event-id="polishing"]')).toBeNull()
     expect(document.querySelector('[data-transcription-title]')?.textContent).toBe('正在润色中')
   })

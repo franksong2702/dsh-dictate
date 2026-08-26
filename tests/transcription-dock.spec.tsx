@@ -168,7 +168,7 @@ describe('TranscriptionDock', () => {
     expect(preview.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
   })
 
-  it('anchors equal-width opaque focus layers above the Composer without taking layout space', () => {
+  it('anchors one opaque focus card above the Composer without taking layout space', () => {
     updateTranscription('dock-render', { phase: 'listening' })
     upsertTranscriptionEvent('dock-render', {
       id: 'recording-started',
@@ -182,7 +182,6 @@ describe('TranscriptionDock', () => {
     render(<TranscriptionDock sessionId="dock-render" />)
     const viewport = document.querySelector('[data-transcription-viewport]') as HTMLElement
     const dock = screen.getByTestId('transcription-dock')
-    const history = document.querySelector('[data-transcription-history]') as HTMLElement
     const currentCard = document.querySelector('[data-transcription-current-card]') as HTMLElement
     expect(viewport.style.position).toBe('absolute')
     expect(viewport.style.left).toBe('12px')
@@ -201,14 +200,12 @@ describe('TranscriptionDock', () => {
     expect(dock.style.backgroundColor).toBe('')
     expect(dock.getAttribute('style')).not.toContain('color-mix')
     expect(dock.getAttribute('style')).not.toContain('backdrop-filter')
-    expect(history.style.width).toBe('100%')
-    expect(history.style.backgroundColor).toBe('var(--dsw-alias-bg-layer-1)')
-    expect(history.getAttribute('style')).not.toContain('color-mix')
-    expect(history.getAttribute('style')).not.toContain('backdrop-filter')
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
+    expect(document.querySelector('[data-transcription-event]')).toBeNull()
     expect(currentCard.style.position).toBe('sticky')
     expect(currentCard.style.bottom).toBe('0px')
     expect(currentCard.style.width).toBe('100%')
-    expect(currentCard.style.marginTop).toBe('-12px')
+    expect(currentCard.style.marginTop).toBe('0px')
     expect(currentCard.style.backgroundColor).toBe('var(--dsw-alias-bg-layer-2)')
     expect(currentCard.getAttribute('style')).not.toContain('color-mix')
     expect(currentCard.getAttribute('style')).not.toContain('backdrop-filter')
@@ -299,7 +296,7 @@ describe('TranscriptionDock', () => {
     expect(screen.getByText(hint)).not.toBeNull()
   })
 
-  it('does not repeat the current terminal state in the history list', () => {
+  it('never renders internal timeline events above the current state', () => {
     updateTranscription('dock-render', {
       phase: 'error',
       status: '转写未完成',
@@ -325,12 +322,12 @@ describe('TranscriptionDock', () => {
 
     render(<TranscriptionDock sessionId="dock-render" />)
     expect(screen.getByRole('alert', { name: /转写未完成/ })).not.toBeNull()
-    expect(document.querySelectorAll('[data-event-id="error"]')).toHaveLength(0)
-    expect(document.querySelectorAll('[data-event-id="recording-stop"]')).toHaveLength(1)
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
+    expect(document.querySelectorAll('[data-transcription-event]')).toHaveLength(0)
     expect(screen.getAllByText('转写未完成')).toHaveLength(1)
   })
 
-  it('shows elapsed time only while recording and leaves the stopped duration in history', () => {
+  it('shows elapsed time only while recording and does not create a second visible layer after stop', () => {
     updateTranscription('dock-render', {
       phase: 'listening',
       status: '正在录音中',
@@ -359,16 +356,15 @@ describe('TranscriptionDock', () => {
     })
     view.rerender(<TranscriptionDock sessionId="dock-render" />)
     expect(document.querySelector('[data-recording-duration]')).toBeNull()
-    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toContain(
-      '录音时长 02:18 · 用户主动结束',
-    )
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
+    expect(document.querySelector('[data-transcription-event]')).toBeNull()
   })
 
-  it('renders natural history copy without generic recording timestamps', () => {
+  it('keeps the automatic-stop reason in the current card without rendering history', () => {
     updateTranscription('dock-render', {
       phase: 'finalizing',
       status: '正在转写中',
-      hint: '正在处理最后一段录音…',
+      hint: '已达到 9 分钟上限，正在处理录音…',
       recordingElapsedMs: 540_000,
     })
     upsertTranscriptionEvent('dock-render', {
@@ -382,10 +378,10 @@ describe('TranscriptionDock', () => {
 
     render(<TranscriptionDock sessionId="dock-render" />)
     expect(document.querySelector('[data-transcription-event-time]')).toBeNull()
-    expect(document.querySelector('[data-event-id="recording-stop"]')?.textContent).toBe(
-      '录音已结束 · 录音时长 09:00 · 已达到时长上限',
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
+    expect(document.querySelector('[data-transcription-current]')?.textContent).toContain(
+      '正在转写中已达到 9 分钟上限，正在处理录音…',
     )
-    expect(document.querySelector('[data-transcription-current]')?.textContent).toContain('正在转写中')
     expect(document.querySelector('[data-recording-duration]')).toBeNull()
     expect(formatRecordingDuration(540_999)).toBe('09:00')
   })
@@ -409,14 +405,13 @@ describe('TranscriptionDock', () => {
 
     render(<TranscriptionDock sessionId="dock-render" />)
     const dock = screen.getByTestId('transcription-dock')
-    const history = document.querySelector('[data-transcription-history]')
     Object.defineProperties(dock, {
       clientHeight: { configurable: true, value: 180 },
       scrollHeight: { configurable: true, value: 600 },
       scrollTop: { configurable: true, value: 420, writable: true },
     })
     expect(dock.getAttribute('tabindex')).toBe('0')
-    expect(history?.getAttribute('tabindex')).toBeNull()
+    expect(document.querySelector('[data-transcription-history]')).toBeNull()
     expect(dock.style.overscrollBehavior).toBe('contain')
 
     fireEvent.scroll(dock)

@@ -531,8 +531,8 @@ export function VoiceInputButton({
         phase: 'finalizing',
         status: localMode ? '正在转写中' : '正在确认中',
         hint: localMode
-          ? '正在处理录音，请稍候…'
-          : '正在确认识别结果，请稍候…',
+          ? '已达到 9 分钟上限，正在处理录音…'
+          : '已达到 9 分钟上限，正在确认识别结果…',
         announcement: localMode
           ? '正在转写中。录音时长 9 分钟，正在处理最后一段录音'
           : '正在确认中。录音时长 9 分钟，正在确认识别结果',

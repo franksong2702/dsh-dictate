@@ -9,7 +9,6 @@ import {
   getTranscriptionSnapshot,
   subscribeTranscription,
   type TranscriptionSnapshot,
-  type TranscriptionTimelineEvent,
 } from './transcriptionStore.ts'
 
 /** Props for the live transcription timeline associated with one session. */
@@ -47,12 +46,6 @@ export function formatRecordingDuration(milliseconds: number): string {
 function durationCopy(snapshot: TranscriptionSnapshot): string {
   if (snapshot.phase !== 'listening' || snapshot.recordingElapsedMs === null) return ''
   return `已持续 ${formatRecordingDuration(snapshot.recordingElapsedMs)}`
-}
-
-function eventColor(event: TranscriptionTimelineEvent): string {
-  if (event.tone === 'error') return 'var(--dsw-alias-state-error-primary)'
-  if (event.tone === 'warning') return 'var(--dsw-alias-state-warn-label)'
-  return 'var(--dsw-alias-label-secondary)'
 }
 
 function phaseIndicatorColor(snapshot: TranscriptionSnapshot): string {
@@ -123,7 +116,6 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
   }, [
     snapshot.finalText,
     snapshot.hint,
-    snapshot.history,
     snapshot.interimText,
     snapshot.phase,
     snapshot.status,
@@ -138,14 +130,6 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
     ? snapshot.announcement
     : [title, duration, snapshot.hint].filter(Boolean).join('。')
   const preview = transcriptPreview(snapshot)
-  const renderedHistory = snapshot.history.filter((event, index) => {
-    const isLatest = index === snapshot.history.length - 1
-    const repeatsCurrent = event.phase === snapshot.phase
-      && event.label === snapshot.status
-      && event.detail === snapshot.hint
-    return !isLatest || !repeatsCurrent
-  })
-  const hasHistory = renderedHistory.length > 0
   const isSettled = snapshot.phase === 'complete'
 
   return (
@@ -222,7 +206,6 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
           .dsh-dictate-timeline-settled {
             animation: dsh-dictate-settled-out ${TRANSCRIPTION_COMPLETE_VISIBLE_MS}ms cubic-bezier(.2, .8, .2, 1) forwards;
           }
-          .dsh-dictate-timeline-event { animation: dsh-dictate-event-in 180ms ease-out; }
           .dsh-dictate-status-indicator {
             position: relative;
             flex: none;
@@ -255,54 +238,10 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
           @media (prefers-reduced-motion: reduce) {
             .dsh-dictate-timeline,
             .dsh-dictate-timeline-settled,
-            .dsh-dictate-timeline-event,
             .dsh-dictate-status-indicator,
             .dsh-dictate-status-indicator::after { animation: none; }
           }
         `}</style>
-
-        {hasHistory ? (
-          <div
-            aria-label="本次语音输入记录"
-            data-transcription-history
-            style={{
-              display: 'flex',
-              flex: 'none',
-              flexDirection: 'column',
-              gap: 4,
-              width: '100%',
-              padding: '8px 12px 20px',
-              border: '1px solid var(--dsw-alias-border-l2)',
-              borderBottom: 0,
-              borderRadius: '12px 12px 6px 6px',
-              backgroundColor: 'var(--dsw-alias-bg-layer-1)',
-              boxShadow: '0 8px 18px rgb(0 0 0 / 6%)',
-              fontSize: 12,
-              lineHeight: 1.35,
-            }}
-          >
-            {renderedHistory.map(event => (
-              <div
-                className="dsh-dictate-timeline-event"
-                data-event-id={event.id}
-                data-transcription-event
-                key={event.id}
-                style={{
-                  display: 'block',
-                  alignItems: 'baseline',
-                  color: eventColor(event),
-                }}
-              >
-                <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-                  <strong style={{ fontWeight: 550 }}>{event.label}</strong>
-                  {event.detail !== '' ? (
-                    <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}> · {event.detail}</span>
-                  ) : null}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : null}
 
         <div
           data-transcription-current-card
@@ -312,7 +251,7 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
             bottom: 0,
             flex: 'none',
             width: '100%',
-            marginTop: hasHistory ? -12 : 0,
+            marginTop: 0,
             overflow: 'hidden',
             border: '1px solid var(--dsw-alias-border-l2)',
             borderRadius: 8,
