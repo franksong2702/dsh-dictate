@@ -55,6 +55,16 @@ function eventColor(event: TranscriptionTimelineEvent): string {
   return 'var(--dsw-alias-label-secondary)'
 }
 
+function phaseIndicatorColor(snapshot: TranscriptionSnapshot): string {
+  if (snapshot.phase === 'listening' || snapshot.phase === 'error') {
+    return 'var(--dsw-alias-state-error-primary, #ee4651)'
+  }
+  if (snapshot.phase === 'complete') {
+    return 'var(--dsw-alias-state-success-primary, #249b68)'
+  }
+  return 'var(--dsw-alias-state-business-primary, #356df3)'
+}
+
 function transcriptPreview(snapshot: TranscriptionSnapshot): ReactNode {
   if (snapshot.finalText === '' && snapshot.interimText === '') return null
   const label = snapshot.phase === 'listening' || snapshot.phase === 'preparing'
@@ -156,7 +166,7 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
       }}
     >
       <div
-        className={isSettled ? 'dsh-dictate-timeline dsh-dictate-timeline-settled' : 'dsh-dictate-timeline'}
+        className={`dsh-dictate-timeline dsh-dictate-phase-${snapshot.phase}${isSettled ? ' dsh-dictate-timeline-settled' : ''}`}
         data-testid="transcription-dock"
         data-transcription-dock
         onScroll={(event) => {
@@ -179,10 +189,6 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
           overflowX: 'hidden',
           overflowY: 'auto',
           overscrollBehavior: 'contain',
-          border: '1px solid var(--dsw-alias-border-l2)',
-          borderRadius: 8,
-          backgroundColor: 'var(--dsw-alias-bg-layer-2)',
-          boxShadow: '0 8px 24px rgb(0 0 0 / 10%)',
           color: 'var(--dsw-alias-label-primary)',
           pointerEvents: isSettled ? 'none' : 'auto',
           scrollbarColor: 'var(--dsw-alias-scrollbar-bg-l2) transparent',
@@ -199,15 +205,59 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
             0%, 88% { transform: translateY(0); }
             100% { transform: translateY(calc(100% + 8px)); }
           }
+          @keyframes dsh-dictate-indicator-breathe {
+            0%, 100% { opacity: .2; transform: scale(1); }
+            50% { opacity: 0; transform: scale(2.35); }
+          }
+          @keyframes dsh-dictate-indicator-confirm {
+            0% { transform: scale(.72); }
+            55% { transform: scale(1.14); }
+            100% { transform: scale(1); }
+          }
+          @keyframes dsh-dictate-indicator-confirm-ring {
+            0% { opacity: .28; transform: scale(1); }
+            100% { opacity: 0; transform: scale(2.5); }
+          }
           .dsh-dictate-timeline { animation: dsh-dictate-event-in 180ms ease-out; }
           .dsh-dictate-timeline-settled {
             animation: dsh-dictate-settled-out ${TRANSCRIPTION_COMPLETE_VISIBLE_MS}ms cubic-bezier(.2, .8, .2, 1) forwards;
           }
           .dsh-dictate-timeline-event { animation: dsh-dictate-event-in 180ms ease-out; }
+          .dsh-dictate-status-indicator {
+            position: relative;
+            flex: none;
+            align-self: center;
+            width: 9px;
+            height: 9px;
+            border-radius: 999px;
+            background: currentColor;
+          }
+          .dsh-dictate-status-indicator::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: currentColor;
+            opacity: 0;
+          }
+          .dsh-dictate-phase-preparing .dsh-dictate-status-indicator::after,
+          .dsh-dictate-phase-listening .dsh-dictate-status-indicator::after,
+          .dsh-dictate-phase-finalizing .dsh-dictate-status-indicator::after,
+          .dsh-dictate-phase-polishing .dsh-dictate-status-indicator::after {
+            animation: dsh-dictate-indicator-breathe 1600ms ease-in-out infinite;
+          }
+          .dsh-dictate-phase-complete .dsh-dictate-status-indicator {
+            animation: dsh-dictate-indicator-confirm 440ms cubic-bezier(.2, .8, .2, 1) 1;
+          }
+          .dsh-dictate-phase-complete .dsh-dictate-status-indicator::after {
+            animation: dsh-dictate-indicator-confirm-ring 440ms ease-out 1;
+          }
           @media (prefers-reduced-motion: reduce) {
             .dsh-dictate-timeline,
             .dsh-dictate-timeline-settled,
-            .dsh-dictate-timeline-event { animation: none; }
+            .dsh-dictate-timeline-event,
+            .dsh-dictate-status-indicator,
+            .dsh-dictate-status-indicator::after { animation: none; }
           }
         `}</style>
 
@@ -220,8 +270,13 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
               flex: 'none',
               flexDirection: 'column',
               gap: 4,
-              padding: '8px 12px 7px',
-              borderBottom: '1px solid var(--dsw-alias-border-l2)',
+              width: '100%',
+              padding: '8px 12px 20px',
+              border: '1px solid var(--dsw-alias-border-l2)',
+              borderBottom: 0,
+              borderRadius: '12px 12px 6px 6px',
+              backgroundColor: 'var(--dsw-alias-bg-layer-1)',
+              boxShadow: '0 8px 18px rgb(0 0 0 / 6%)',
               fontSize: 12,
               lineHeight: 1.35,
             }}
@@ -250,68 +305,86 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
         ) : null}
 
         <div
-          aria-atomic="true"
-          aria-label={announcement || title || '语音输入状态'}
-          aria-live={snapshot.phase === 'error' ? 'assertive' : 'polite'}
-          data-transcription-current
-          role={role}
+          data-transcription-current-card
           style={{
             position: 'sticky',
-            zIndex: 1,
-            top: 0,
-            display: 'flex',
+            zIndex: 2,
+            bottom: 0,
             flex: 'none',
-            alignItems: 'baseline',
-            gap: 8,
-            minWidth: 0,
-            padding: '8px 12px',
+            width: '100%',
+            marginTop: hasHistory ? -12 : 0,
+            overflow: 'hidden',
+            border: '1px solid var(--dsw-alias-border-l2)',
+            borderRadius: 8,
             backgroundColor: 'var(--dsw-alias-bg-layer-2)',
-            fontSize: 13,
-            lineHeight: 1.5,
+            boxShadow: '0 7px 22px rgb(0 0 0 / 9%)',
           }}
         >
-          <strong
-            aria-hidden="true"
-            data-transcription-title
-            style={{ flex: 'none', fontWeight: 600 }}
+          <div
+            aria-atomic="true"
+            aria-label={announcement || title || '语音输入状态'}
+            aria-live={snapshot.phase === 'error' ? 'assertive' : 'polite'}
+            data-transcription-current
+            role={role}
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              minWidth: 0,
+              padding: '8px 12px',
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
           >
-            {title}
-          </strong>
-          <span
-            aria-hidden="true"
-            data-transcription-auxiliary
-            style={{ display: 'inline-flex', minWidth: 0, flexWrap: 'wrap', gap: 6 }}
-          >
-            {duration !== '' ? (
-              <span
-                data-recording-duration
-                style={{ color: 'var(--dsw-alias-label-tertiary)', fontVariantNumeric: 'tabular-nums' }}
-              >
-                {duration}
-              </span>
-            ) : null}
-            {duration !== '' && snapshot.hint !== '' ? (
-              <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>·</span>
-            ) : null}
-            {snapshot.hint !== '' ? (
-              <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>{snapshot.hint}</span>
-            ) : null}
-          </span>
-        </div>
-
-        {preview}
-
-        {snapshot.action !== null ? (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 12px 8px' }}>
-            <button
-              type="button"
-              onClick={snapshot.action.run}
-              style={{ pointerEvents: 'auto' }}
+            <span
+              aria-hidden="true"
+              className="dsh-dictate-status-indicator"
+              data-transcription-indicator
+              style={{ color: phaseIndicatorColor(snapshot) }}
+            />
+            <strong
+              aria-hidden="true"
+              data-transcription-title
+              style={{ flex: 'none', fontWeight: 600 }}
             >
-              {snapshot.action.label}
-            </button>
+              {title}
+            </strong>
+            <span
+              aria-hidden="true"
+              data-transcription-auxiliary
+              style={{ display: 'inline-flex', minWidth: 0, flexWrap: 'wrap', gap: 6 }}
+            >
+              {duration !== '' ? (
+                <span
+                  data-recording-duration
+                  style={{ color: 'var(--dsw-alias-label-tertiary)', fontVariantNumeric: 'tabular-nums' }}
+                >
+                  {duration}
+                </span>
+              ) : null}
+              {duration !== '' && snapshot.hint !== '' ? (
+                <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>·</span>
+              ) : null}
+              {snapshot.hint !== '' ? (
+                <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>{snapshot.hint}</span>
+              ) : null}
+            </span>
           </div>
-        ) : null}
+
+          {preview}
+
+          {snapshot.action !== null ? (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 12px 8px' }}>
+              <button
+                type="button"
+                onClick={snapshot.action.run}
+                style={{ pointerEvents: 'auto' }}
+              >
+                {snapshot.action.label}
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   )

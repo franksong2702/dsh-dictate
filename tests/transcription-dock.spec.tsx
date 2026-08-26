@@ -168,12 +168,22 @@ describe('TranscriptionDock', () => {
     expect(preview.getAttribute('style')).toContain('var(--dsw-alias-label-tertiary)')
   })
 
-  it('anchors an opaque clipped viewport above the Composer without taking layout space', () => {
+  it('anchors equal-width opaque focus layers above the Composer without taking layout space', () => {
     updateTranscription('dock-render', { phase: 'listening' })
+    upsertTranscriptionEvent('dock-render', {
+      id: 'recording-started',
+      elapsedMs: 0,
+      phase: 'listening',
+      label: '开始录音',
+      detail: '麦克风已开始采集',
+      tone: 'complete',
+    })
 
     render(<TranscriptionDock sessionId="dock-render" />)
     const viewport = document.querySelector('[data-transcription-viewport]') as HTMLElement
     const dock = screen.getByTestId('transcription-dock')
+    const history = document.querySelector('[data-transcription-history]') as HTMLElement
+    const currentCard = document.querySelector('[data-transcription-current-card]') as HTMLElement
     expect(viewport.style.position).toBe('absolute')
     expect(viewport.style.left).toBe('12px')
     expect(viewport.style.right).toBe('12px')
@@ -188,13 +198,50 @@ describe('TranscriptionDock', () => {
     expect(dock.style.zIndex).toBe('40')
     expect(Number(dock.style.zIndex)).toBeLessThan(100)
     expect(dock.style.pointerEvents).toBe('auto')
-    expect(dock.style.backgroundColor).toBe('var(--dsw-alias-bg-layer-2)')
+    expect(dock.style.backgroundColor).toBe('')
     expect(dock.getAttribute('style')).not.toContain('color-mix')
     expect(dock.getAttribute('style')).not.toContain('backdrop-filter')
-    const current = document.querySelector('[data-transcription-current]') as HTMLElement
-    expect(current.style.backgroundColor).toBe('var(--dsw-alias-bg-layer-2)')
-    expect(current.getAttribute('style')).not.toContain('color-mix')
-    expect(current.getAttribute('style')).not.toContain('backdrop-filter')
+    expect(history.style.width).toBe('100%')
+    expect(history.style.backgroundColor).toBe('var(--dsw-alias-bg-layer-1)')
+    expect(history.getAttribute('style')).not.toContain('color-mix')
+    expect(history.getAttribute('style')).not.toContain('backdrop-filter')
+    expect(currentCard.style.position).toBe('sticky')
+    expect(currentCard.style.bottom).toBe('0px')
+    expect(currentCard.style.width).toBe('100%')
+    expect(currentCard.style.marginTop).toBe('-12px')
+    expect(currentCard.style.backgroundColor).toBe('var(--dsw-alias-bg-layer-2)')
+    expect(currentCard.getAttribute('style')).not.toContain('color-mix')
+    expect(currentCard.getAttribute('style')).not.toContain('backdrop-filter')
+  })
+
+  it('uses glyph-free phase lights with active breathing and one-shot completion motion', () => {
+    const view = render(<TranscriptionDock sessionId="dock-render" />)
+    const phases = [
+      ['listening', 'var(--dsw-alias-state-error-primary, #ee4651)'],
+      ['finalizing', 'var(--dsw-alias-state-business-primary, #356df3)'],
+      ['polishing', 'var(--dsw-alias-state-business-primary, #356df3)'],
+      ['complete', 'var(--dsw-alias-state-success-primary, #249b68)'],
+      ['error', 'var(--dsw-alias-state-error-primary, #ee4651)'],
+    ] as const
+
+    for (const [phase, expectedColor] of phases) {
+      act(() => {
+        updateTranscription('dock-render', { phase })
+      })
+      view.rerender(<TranscriptionDock sessionId="dock-render" />)
+      const dock = screen.getByTestId('transcription-dock')
+      const indicator = document.querySelector('[data-transcription-indicator]') as HTMLElement
+      expect(dock.className).toContain(`dsh-dictate-phase-${phase}`)
+      expect(indicator.textContent).toBe('')
+      expect(indicator.style.color).toBe(expectedColor)
+    }
+
+    const css = document.querySelector('style')?.textContent ?? ''
+    expect(css).toContain('dsh-dictate-indicator-breathe 1600ms ease-in-out infinite')
+    expect(css).toContain('dsh-dictate-indicator-confirm 440ms')
+    expect(css).toContain('dsh-dictate-indicator-confirm-ring 440ms ease-out 1')
+    expect(css).not.toContain('dsh-dictate-phase-error .dsh-dictate-status-indicator::after')
+    expect(css).toContain('prefers-reduced-motion: reduce')
   })
 
   it('slides the completed timeline down without fading it', () => {
