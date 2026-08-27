@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { SettingsPanel, type ModelOption } from './SettingsPanel.tsx'
@@ -47,7 +49,7 @@ import {
 } from '../local-service-contract.ts'
 
 /*
- * DSH 0.1.1-rc.2 renders this session-scoped slot at runtime but omits it from
+ * DSH 0.1.2-alpha.1 renders this session-scoped slot at runtime but omits it from
  * the published SlotMap declaration. Keep the bridge exact so a future host
  * declaration either merges cleanly or produces a useful contract mismatch.
  */
@@ -96,7 +98,7 @@ interface ModelReference {
 }
 
 /** Client services used by the composer contribution. */
-export const inject = ['connection', 'slots']
+export const inject = ['connection', 'slots', 'remote.session']
 
 /** Encode provider and model as an opaque select value without delimiter assumptions. */
 export function encodeModelReference(reference: ModelReference): string {
@@ -201,9 +203,9 @@ function VoiceInputSettings({ loadModels, localService }: {
 export function apply(ctx: ClientContext): void {
   const connection = (ctx as ClientContext & { readonly connection: ConnectionHandle }).connection
   const loadModels = async (): Promise<readonly ModelOption[]> => {
-    const response = await connection.api.llm.models({})
-    if (!response.result.ok) throw new Error(response.result.error.message)
-    return response.result.value.groups.flatMap(group => group.models.map(model => ({
+    const response = await ctx.remote.session.modelCatalog()
+    if (!response.ok) throw new Error(response.error.message)
+    return response.value.groups.flatMap(group => group.models.map(model => ({
       value: encodeModelReference({ provider: group.id, model: model.id }),
       label: `${model.name} · ${group.name}`,
     })))

@@ -7,6 +7,7 @@ import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { TranscriptionDock } from '../src/client/TranscriptionDock.tsx'
 import {
   apply,
+  inject as clientServices,
   encodeModelReference,
   joinRecognitionSegments,
   VoiceInputButton,
@@ -123,6 +124,7 @@ describe('Contextual Dictation browser plugin', () => {
   })
 
   it('registers a card inside the Plugin configuration tab', () => {
+    expect(clientServices).toContain('remote.session')
     const register = vi.fn(() => vi.fn())
     const inject = vi.fn((name: string, mount: () => unknown) => { mount() })
 
@@ -149,18 +151,16 @@ describe('Contextual Dictation browser plugin', () => {
     })
     const inject = vi.fn((_name: string, mount: () => unknown) => { mount() })
     const models = vi.fn(() => Promise.resolve({
-      rpcId: 'models-1',
-      result: {
-        ok: true as const,
-        value: {
-          groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'chat', name: 'DeepSeek Chat' }] }],
-          failures: [],
-        },
+      ok: true as const,
+      value: {
+        groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'chat', name: 'DeepSeek Chat' }] }],
+        failures: [],
       },
     }))
     apply({
       slots: { inject, register },
-      connection: { api: { llm: { models } }, rpc: { call: vi.fn() } },
+      connection: { rpc: { call: vi.fn() } },
+      remote: { session: { modelCatalog: models } },
     } as never)
 
     const Settings = components[2]
@@ -173,6 +173,31 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.getByLabelText('润色模型')).not.toBeNull()
     expect(screen.getByRole('option', { name: 'DeepSeek Chat · DeepSeek' })).not.toBeNull()
     expect(models).toHaveBeenCalledOnce()
+    expect(models).toHaveBeenCalledWith()
+  })
+
+  it.each(['remote-error', 'transport-error'])('keeps settings usable when the Remote catalog fails: %s', async (failure) => {
+    let Settings: ComponentType<Record<string, never>> | undefined
+    const modelCatalog = vi.fn(() => failure === 'transport-error'
+      ? Promise.reject(new Error('transport unavailable'))
+      : Promise.resolve({ ok: false, error: { message: 'catalog unavailable' } }))
+    apply({
+      slots: {
+        inject: (_name: string, mount: () => unknown) => mount(),
+        register: (entry: { name: string }, component: unknown) => {
+          if (entry.name === 'settings.plugin.item') Settings = component as ComponentType<Record<string, never>>
+          return () => {}
+        },
+      },
+      connection: { rpc: { call: vi.fn() } },
+      remote: { session: { modelCatalog } },
+    } as never)
+    render(Settings === undefined ? null : <Settings />)
+    await act(async () => { await Promise.resolve() })
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    expect(screen.getByLabelText('识别语言')).not.toBeNull()
+    expect(modelCatalog).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('option', { name: 'DeepSeek Chat · DeepSeek' })).toBeNull()
   })
 
   it('uses host theme tokens without a fixed dark fallback', () => {

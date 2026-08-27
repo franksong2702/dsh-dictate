@@ -162,7 +162,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_CONFIG): void {
         },
       }
     }
-  }, { authority: 'trusted-host' }), 'dictate: contextual terminology and model polish RPC')
+  }), 'dictate: contextual terminology and model polish RPC')
   installSettingsSection(ctx, DICTATE_SETTINGS_NS, Config, config, {
     setSource(source) { currentConfig = source },
     onChange: scheduleAutoStart,

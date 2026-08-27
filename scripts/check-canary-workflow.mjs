@@ -34,7 +34,7 @@ assertContract('workflow never publishes or deploys', !/npm\s+publish|gh\s+relea
 assertContract('all third-party actions are pinned', [...workflow.matchAll(/uses:\s+[^\s@]+@([^\s#]+)/gu)].every(match => /^[0-9a-f]{40}$/u.test(match[1] ?? '')))
 assertContract('documentation excludes local ASR from upstream canary', documentation.includes('does not start a model provider') && documentation.includes('optional local ASR runtime/model'))
 assertContract('documentation defines infrastructure exit code', documentation.includes('`2` for candidate resolution or checker infrastructure failures'))
-assertContract('compatibility baseline is explicit', compatibility.schemaVersion === 1 && compatibility.dshPluginApi?.version === '0.1.1-rc.2')
+assertContract('compatibility baseline is explicit', compatibility.schemaVersion === 1 && compatibility.dshPluginApi?.version === '0.1.2-alpha.1')
 assertContract('canary scripts are package scripts', packageManifest.scripts?.['check:dsh-next'] === 'node scripts/check-dsh-next.mjs' && packageManifest.scripts?.['check:dsh-install'] === 'node scripts/check-dsh-install.mjs')
 
 if (failures.length > 0) {
