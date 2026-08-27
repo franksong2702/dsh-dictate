@@ -4,7 +4,11 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { SettingsPanel, type ModelOption } from './SettingsPanel.tsx'
-import { TranscriptionDock } from './TranscriptionDock.tsx'
+import {
+  formatRecordingDuration,
+  TRANSCRIPTION_COMPLETE_VISIBLE_MS,
+  TranscriptionDock,
+} from './TranscriptionDock.tsx'
 import { DEFAULT_LOCAL_ENDPOINT, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
 import {
   checkLocalEndpoint as checkLocalEndpointHealth,
@@ -19,7 +23,14 @@ import {
   type AsrProviderSession,
   type AsrProviderStartOptions,
 } from './asrProvider.ts'
-import { resetTranscription, updateTranscription } from './transcriptionStore.ts'
+import {
+  getTranscriptionSnapshot,
+  resetTranscription,
+  updateTranscription,
+  upsertTranscriptionEvent,
+  type TranscriptionPhase,
+  type TranscriptionTimelineEvent,
+} from './transcriptionStore.ts'
 import {
   parseContextTerms,
   type ContextTerm,
@@ -34,6 +45,20 @@ import {
   type LocalServiceInstallStatus,
   type LocalServiceStatus,
 } from '../local-service-contract.ts'
+
+/*
+ * DSH 0.1.1-rc.2 renders this session-scoped slot at runtime but omits it from
+ * the published SlotMap declaration. Keep the bridge exact so a future host
+ * declaration either merges cleanly or produces a useful contract mismatch.
+ */
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface SlotMap {
+    'conversation.input.overlay': {
+      kind: 'list'
+      scope: 'session'
+    }
+  }
+}
 
 interface InputActions {
   setDraft(text: string): void
@@ -115,6 +140,16 @@ function contextTermsKey(
 }
 
 const WEB_SPEECH_PROVIDER = createWebSpeechProvider()
+export const DICTATION_WARNING_MS = 8 * 60 * 1_000
+export const DICTATION_MAX_DURATION_MS = 9 * 60 * 1_000
+export const MEANINGFUL_TRANSCRIPTION_STAGE_MS = 3_000
+
+const COUNTDOWN_ANNOUNCEMENT_SECONDS = new Set([60, 30, 10, 5, 4, 3, 2, 1])
+
+function countdownText(milliseconds: number): string {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1_000))
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+}
 
 function providerErrorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error
@@ -255,11 +290,11 @@ export function apply(ctx: ClientContext): void {
     loadContextTerms={loadContextTerms}
     checkLocalEndpoint={testEndpoint}
   />))
-  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-    name: 'conversation.input.dock',
+  ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
+    name: 'conversation.input.overlay',
     id: 'dictate-transcription',
     order: 90,
-  }, props => <TranscriptionDock sessionId={(props as VoiceInputProps).sessionId} />))
+  }, props => <TranscriptionDock sessionId={props.sessionId} />))
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     key: DICTATE_SETTINGS_NAMESPACE,
@@ -289,8 +324,16 @@ export function VoiceInputButton({
   const actionsRef = useRef(inputActions)
   const failedRef = useRef(false)
   const finalizingRef = useRef(false)
+  const automaticStopRef = useRef(false)
   const messageTimerRef = useRef<number>()
   const permissionStatusTimerRef = useRef<number>()
+  const warningTimerRef = useRef<number>()
+  const countdownTimerRef = useRef<number>()
+  const deadlineTimerRef = useRef<number>()
+  const dictationStartedAtRef = useRef<number>()
+  const recordingElapsedMsRef = useRef<number | null>(null)
+  const countdownActiveRef = useRef(false)
+  const finalizingStartedAtRef = useRef<number>()
   const polishAbortRef = useRef<AbortController>()
   const contextTermsRef = useRef<readonly ContextTerm[]>([])
   const contextTermsKeyRef = useRef<string>()
@@ -372,26 +415,166 @@ export function VoiceInputButton({
     permissionStatusTimerRef.current = undefined
   }
 
+  const clearDictationTimers = (): void => {
+    if (warningTimerRef.current !== undefined) window.clearTimeout(warningTimerRef.current)
+    if (countdownTimerRef.current !== undefined) window.clearInterval(countdownTimerRef.current)
+    if (deadlineTimerRef.current !== undefined) window.clearTimeout(deadlineTimerRef.current)
+    warningTimerRef.current = undefined
+    countdownTimerRef.current = undefined
+    deadlineTimerRef.current = undefined
+    countdownActiveRef.current = false
+  }
+
+  const currentRecordingElapsedMs = (): number | null => {
+    const startedAt = dictationStartedAtRef.current
+    if (startedAt === undefined) return recordingElapsedMsRef.current
+    return Math.min(DICTATION_MAX_DURATION_MS, Math.max(0, Date.now() - startedAt))
+  }
+
+  const freezeRecordingClock = (elapsedOverride?: number): number | null => {
+    const elapsed = elapsedOverride ?? currentRecordingElapsedMs()
+    clearDictationTimers()
+    dictationStartedAtRef.current = undefined
+    recordingElapsedMsRef.current = elapsed
+    if (elapsed !== null) updateTranscription(sessionId, { recordingElapsedMs: elapsed })
+    return elapsed
+  }
+
+  const addTimelineEvent = (
+    id: string,
+    phase: Exclude<TranscriptionPhase, 'idle'>,
+    label: string,
+    detail: string,
+    tone: TranscriptionTimelineEvent['tone'],
+    elapsedMs: number | null = currentRecordingElapsedMs(),
+  ): void => {
+    upsertTranscriptionEvent(sessionId, { id, phase, label, detail, tone, elapsedMs })
+  }
+
+  const recordingStopDetail = (elapsedMs: number | null, reason: string): string => (
+    `录音时长 ${formatRecordingDuration(elapsedMs ?? 0)} · ${reason}`
+  )
+
+  const finishFinalizingStage = (retainAsHistory: boolean): void => {
+    const startedAt = finalizingStartedAtRef.current
+    finalizingStartedAtRef.current = undefined
+    if (!retainAsHistory || startedAt === undefined
+      || Date.now() - startedAt < MEANINGFUL_TRANSCRIPTION_STAGE_MS) return
+    addTimelineEvent(
+      'transcription-complete',
+      'finalizing',
+      '转写已完成',
+      '已生成初步转写',
+      'complete',
+      null,
+    )
+  }
+
+  const startDictationTimers = (localMode: boolean): void => {
+    clearDictationTimers()
+    const startedAt = Date.now()
+    const deadline = startedAt + DICTATION_MAX_DURATION_MS
+    dictationStartedAtRef.current = startedAt
+    recordingElapsedMsRef.current = 0
+    countdownActiveRef.current = false
+    updateTranscription(sessionId, { recordingElapsedMs: 0 })
+    const updateClock = (): void => {
+      const elapsedMs = Math.min(DICTATION_MAX_DURATION_MS, Math.max(0, Date.now() - startedAt))
+      recordingElapsedMsRef.current = elapsedMs
+      const patch: {
+        recordingElapsedMs: number
+        phase?: 'listening'
+        status?: string
+        hint?: string
+        action?: null
+        announcement?: string
+      } = { recordingElapsedMs: elapsedMs }
+      if (countdownActiveRef.current) {
+        const remainingMs = Math.max(0, deadline - Date.now())
+        const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1_000))
+        const detail = `${countdownText(remainingMs)} 后自动结束并转写`
+        patch.phase = 'listening'
+        patch.status = localMode ? '正在录音中' : '正在听写中'
+        patch.hint = detail
+        patch.action = null
+        if (COUNTDOWN_ANNOUNCEMENT_SECONDS.has(remainingSeconds)) {
+          patch.announcement = `${patch.status}。${remainingSeconds} 秒后自动结束并转写`
+        }
+      }
+      updateTranscription(sessionId, patch)
+    }
+    countdownTimerRef.current = window.setInterval(updateClock, 1_000)
+    warningTimerRef.current = window.setTimeout(() => {
+      warningTimerRef.current = undefined
+      if (finalizingRef.current || sessionRef.current === undefined) return
+      countdownActiveRef.current = true
+      updateClock()
+    }, DICTATION_WARNING_MS)
+    deadlineTimerRef.current = window.setTimeout(() => {
+      const activeSession = sessionRef.current
+      if (activeSession === undefined || finalizingRef.current) return
+      freezeRecordingClock(DICTATION_MAX_DURATION_MS)
+      automaticStopRef.current = true
+      finalizingRef.current = true
+      finalizingStartedAtRef.current = Date.now()
+      setRecording(false)
+      setPreparing(localMode)
+      addTimelineEvent(
+        'recording-stop',
+        'finalizing',
+        '录音已结束',
+        recordingStopDetail(DICTATION_MAX_DURATION_MS, '已达到时长上限'),
+        'complete',
+        DICTATION_MAX_DURATION_MS,
+      )
+      updateTranscription(sessionId, {
+        phase: 'finalizing',
+        status: localMode ? '正在转写中' : '正在确认中',
+        hint: localMode
+          ? '已达到 9 分钟上限，正在处理录音…'
+          : '已达到 9 分钟上限，正在确认识别结果…',
+        announcement: localMode
+          ? '正在转写中。录音时长 9 分钟，正在处理最后一段录音'
+          : '正在确认中。录音时长 9 分钟，正在确认识别结果',
+        action: null,
+      })
+      void activeSession.stop()
+    }, DICTATION_MAX_DURATION_MS)
+  }
+
   const showTransientMessage = (title: string, detail: string, error = false): void => {
     clearMessageTimer()
     clearPermissionStatusTimer()
+    freezeRecordingClock()
+    finishFinalizingStage(false)
+    addTimelineEvent(
+      error ? 'error' : 'complete',
+      error ? 'error' : 'complete',
+      title,
+      detail,
+      error ? 'error' : 'complete',
+    )
     updateTranscription(sessionId, {
       phase: error ? 'error' : 'complete',
       finalText: '',
       interimText: '',
       status: title,
       hint: detail,
+      announcement: `${title}。${detail}`,
       action: null,
     })
-    messageTimerRef.current = window.setTimeout(() => {
-      resetTranscription(sessionId)
-      messageTimerRef.current = undefined
-    }, 3000)
+    if (!error) {
+      messageTimerRef.current = window.setTimeout(() => {
+        resetTranscription(sessionId)
+        messageTimerRef.current = undefined
+      }, TRANSCRIPTION_COMPLETE_VISIBLE_MS)
+    }
   }
 
   useEffect(() => () => {
     clearMessageTimer()
     clearPermissionStatusTimer()
+    clearDictationTimers()
     clearTermsDebounce()
     startAbortRef.current?.abort()
     startAbortRef.current = undefined
@@ -405,6 +588,10 @@ export function VoiceInputButton({
     contextTermsRef.current = []
     contextTermsKeyRef.current = undefined
     finalizingRef.current = false
+    automaticStopRef.current = false
+    finalizingStartedAtRef.current = undefined
+    dictationStartedAtRef.current = undefined
+    recordingElapsedMsRef.current = null
     resetTranscription(sessionId)
   }, [sessionId])
 
@@ -470,6 +657,7 @@ export function VoiceInputButton({
   const finishTranscript = async (transcript: string, allowAutomaticSend: boolean): Promise<void> => {
     const selected = selectedModel
     if (!prefs.modelPolishEnabled || polish === undefined || selected === undefined) {
+      finishFinalizingStage(false)
       insertTranscript(transcript, allowAutomaticSend)
       const polishUnavailable = prefs.modelPolishEnabled && selected === undefined
       showTransientMessage(
@@ -486,12 +674,18 @@ export function VoiceInputButton({
       return
     }
     clearMessageTimer()
+    finishFinalizingStage(true)
     updateTranscription(sessionId, {
       phase: 'polishing',
       finalText: transcript,
       interimText: '',
       status: '正在润色中',
-      hint: allowAutomaticSend ? '润色后将直接发送' : '润色后将写入输入框',
+      hint: allowAutomaticSend
+        ? '初步转写不是最终结果；完成后将直接发送'
+        : '初步转写不是最终结果；完成后将写入输入框',
+      announcement: allowAutomaticSend
+        ? '正在润色中。初步转写不是最终结果，润色后将直接发送'
+        : '正在润色中。初步转写不是最终结果，润色后将写入输入框',
     })
     const controller = new AbortController()
     polishAbortRef.current?.abort()
@@ -530,29 +724,49 @@ export function VoiceInputButton({
         void activeSession.abort()
         return
       }
+      const elapsedMs = freezeRecordingClock()
+      automaticStopRef.current = false
       finalizingRef.current = true
+      finalizingStartedAtRef.current = Date.now()
       setRecording(false)
       const localMode = activeProviderRef.current === 'local-endpoint'
       setPreparing(localMode)
+      addTimelineEvent(
+        'recording-stop',
+        'finalizing',
+        '录音已结束',
+        recordingStopDetail(elapsedMs, '用户主动结束'),
+        'complete',
+        elapsedMs,
+      )
       updateTranscription(sessionId, {
         phase: 'finalizing',
         status: localMode ? '正在转写中' : '正在确认中',
-        hint: localMode ? '正在保留结尾语音，避免截断最后一句…' : '正在确认识别结果，请稍候…',
+        hint: localMode ? '正在处理录音，请稍候…' : '正在确认识别结果，请稍候…',
+        announcement: localMode
+          ? '正在转写中。正在处理最后一段录音'
+          : '正在确认中。正在确认识别结果',
         action: null,
       })
       void activeSession.stop()
       return
     }
     if (startAbortRef.current !== undefined) {
+      const retryAfterPreflightError = getTranscriptionSnapshot(sessionId).phase === 'error'
+      clearDictationTimers()
       clearPermissionStatusTimer()
       startAbortRef.current.abort()
       startAbortRef.current = undefined
       activeProviderRef.current = undefined
       setPreparing(false)
       resetTranscription(sessionId)
-      return
+      if (!retryAfterPreflightError) return
     }
     if (!supported) {
+      clearMessageTimer()
+      resetTranscription(sessionId)
+      recordingElapsedMsRef.current = null
+      dictationStartedAtRef.current = undefined
       showTransientMessage(
         '转写未完成',
         prefs.transcriptionProvider === 'web-speech'
@@ -566,6 +780,12 @@ export function VoiceInputButton({
     clearTermsDebounce()
     polishAbortRef.current?.abort()
     polishAbortRef.current = undefined
+    clearMessageTimer()
+    clearPermissionStatusTimer()
+    clearDictationTimers()
+    dictationStartedAtRef.current = undefined
+    recordingElapsedMsRef.current = null
+    resetTranscription(sessionId)
     const termsRequestAtStart: ContextTermsRequest = {
       ...contextTermsRequest,
       draft: draftRef.current,
@@ -589,6 +809,8 @@ export function VoiceInputButton({
     const controller = new AbortController()
     startAbortRef.current = controller
     finalizingRef.current = false
+    automaticStopRef.current = false
+    finalizingStartedAtRef.current = undefined
     failedRef.current = false
     let ended = false
     let fallbackNotice = false
@@ -598,9 +820,6 @@ export function VoiceInputButton({
     activeProviderRef.current = providerId
     if (localMode) {
       setPreparing(true)
-      clearMessageTimer()
-      clearPermissionStatusTimer()
-      resetTranscription(sessionId)
     }
 
     const prepareForLocalMicrophone = (): void => {
@@ -614,6 +833,7 @@ export function VoiceInputButton({
           interimText: '',
           status: '等待授权中',
           hint: '请按浏览器提示允许麦克风访问…',
+          announcement: '等待授权中。请按浏览器提示允许麦克风访问',
           action: null,
         })
       }, 2000)
@@ -628,6 +848,7 @@ export function VoiceInputButton({
         clearPermissionStatusTimer()
         setPreparing(false)
         setRecording(true)
+        startDictationTimers(localMode)
         updateTranscription(sessionId, {
           phase: 'listening',
           finalText: '',
@@ -638,10 +859,22 @@ export function VoiceInputButton({
             : fallbackNotice
               ? '本地语音识别暂不可用，本次已改用浏览器语音识别；请开始说话…'
               : '请开始说话…',
+          announcement: localMode
+            ? '正在录音中。再次点击麦克风结束并转写'
+            : fallbackNotice
+              ? '正在听写中。本次已改用浏览器语音识别，请开始说话'
+              : '正在听写中。请开始说话',
           action: null,
         })
       },
       onInterim: (text) => {
+        if (countdownActiveRef.current && !finalizingRef.current) {
+          updateTranscription(sessionId, {
+            finalText: currentFinalText(),
+            interimText: text,
+          })
+          return
+        }
         updateTranscription(sessionId, {
           phase: finalizingRef.current ? 'finalizing' : 'listening',
           finalText: currentFinalText(),
@@ -651,9 +884,17 @@ export function VoiceInputButton({
       },
       onFinal: (text) => {
         if (text.trim() !== '') finalSegments.push(text)
+        const showStableText = !localMode || finalizingRef.current
+        if (countdownActiveRef.current && !finalizingRef.current) {
+          updateTranscription(sessionId, {
+            finalText: showStableText ? currentFinalText() : '',
+            interimText: '',
+          })
+          return
+        }
         updateTranscription(sessionId, {
           phase: finalizingRef.current ? 'finalizing' : 'listening',
-          finalText: currentFinalText(),
+          finalText: showStableText ? currentFinalText() : '',
           interimText: '',
           status: finalizingRef.current
             ? localMode ? '正在转写中' : '正在确认中'
@@ -667,32 +908,43 @@ export function VoiceInputButton({
         updateTranscription(sessionId, {
           phase: 'finalizing',
           status: localMode ? '正在转写中' : '正在确认中',
-          hint: localMode ? '正在保留结尾语音，避免截断最后一句…' : '正在确认识别结果，请稍候…',
+          hint: localMode ? '正在处理录音，请稍候…' : '正在确认识别结果，请稍候…',
+          announcement: automaticStopRef.current
+            ? localMode
+              ? '正在转写中。录音已达到 9 分钟上限'
+              : '正在确认中。录音已达到 9 分钟上限'
+            : localMode
+              ? '正在转写中。正在处理最后一段录音'
+              : '正在确认中。正在确认识别结果',
           action: null,
         })
       },
       onProgress: (progress) => {
         if (progress.message === undefined) return
         if (progress.phase === 'microphone') return
+        if (countdownActiveRef.current && !finalizingRef.current) return
         if (progress.phase === 'voice') {
           if (!localMode || finalizingRef.current) return
           updateTranscription(sessionId, {
             phase: 'listening',
             status: '正在录音中',
             hint: '已检测到语音；再次点击麦克风结束并转写',
+            announcement: '正在录音中。已检测到语音',
             action: null,
           })
           return
         }
+        if (localMode && !finalizingRef.current) return
         clearPermissionStatusTimer()
         updateTranscription(sessionId, {
           phase: 'finalizing',
           status: '正在转写中',
           hint: progress.phase === 'audio'
-            ? progress.message.includes('保留')
-              ? '正在保留结尾语音，避免截断最后一句…'
-              : '录音已结束，正在准备音频…'
-            : '本地服务正在识别语音，请稍候…',
+            ? '正在处理录音，请稍候…'
+            : '正在生成转写结果，请稍候…',
+          announcement: progress.phase === 'audio'
+            ? '正在转写中。正在处理录音'
+            : '正在转写中。正在生成转写结果',
           action: null,
         })
       },
@@ -702,6 +954,7 @@ export function VoiceInputButton({
         showTransientMessage('转写未完成', error.message, true)
       },
       onEnd: (reason) => {
+        freezeRecordingClock()
         clearPermissionStatusTimer()
         ended = true
         sessionRef.current = undefined
@@ -709,13 +962,15 @@ export function VoiceInputButton({
         startAbortRef.current = undefined
         setRecording(false)
         setPreparing(false)
-        const allowAutomaticSend = reason === 'stop' && finalizingRef.current && prefs.autoSendEnabled
+        const allowAutomaticSend = reason === 'stop' && finalizingRef.current
+          && !automaticStopRef.current && prefs.autoSendEnabled
         finalizingRef.current = false
+        automaticStopRef.current = false
         const transcript = currentFinalText().trim()
         if (transcript !== '') {
           void finishTranscript(transcript, allowAutomaticSend)
         } else if (!failedRef.current && reason !== 'abort') {
-          showTransientMessage('转写未完成', '没有识别到语音，请重试')
+          showTransientMessage('转写未完成', '没有识别到语音，请重试', true)
         } else if (reason === 'abort' && !failedRef.current) {
           resetTranscription(sessionId)
         }
@@ -802,8 +1057,17 @@ export function VoiceInputButton({
           interimText: '',
           status: '本地识别不可用',
           hint: `${detail}。可再次点击麦克风重试，或仅本次改用浏览器语音识别。`,
+          announcement: `本地识别不可用。${detail}`,
           action: { label: '本次改用浏览器识别', run: fallbackToWebSpeech },
         })
+        addTimelineEvent(
+          'error',
+          'error',
+          '本地识别不可用',
+          detail,
+          'error',
+          null,
+        )
         return
       }
       rejectSession(error)
