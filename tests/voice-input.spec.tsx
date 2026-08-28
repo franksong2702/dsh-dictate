@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps, ComponentType, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
 import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { TranscriptionDock } from '../src/client/TranscriptionDock.tsx'
 import {
@@ -198,6 +199,46 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.getByLabelText('识别语言')).not.toBeNull()
     expect(modelCatalog).toHaveBeenCalledOnce()
     expect(screen.queryByRole('option', { name: 'DeepSeek Chat · DeepSeek' })).toBeNull()
+  })
+
+  it('loads polishing models through a real Cordis plugin injection boundary', async () => {
+    const ctx = new Context()
+    let Settings: ComponentType<Record<string, never>> | undefined
+    const modelCatalog = vi.fn(async () => ({
+      ok: true as const,
+      value: { groups: [{ id: 'codex', name: 'Codex', models: [{ id: 'gpt-test', name: 'GPT Test' }] }], failures: [] },
+    }))
+    const session = { modelCatalog }
+    // Match the host: services belong to a sibling plugin, not the root.
+    // Root-provided values bypass the consumer's declared injection boundary.
+    const remoteFiber = ctx.plugin((scope) => {
+      scope.provide('remote', { session } as never)
+      scope.provide('remote.session', session)
+    })
+    await remoteFiber
+    ctx.provide('connection', { rpc: { call: vi.fn() } } as never)
+    ctx.provide('slots', {
+      inject: (_name: string, mount: () => unknown) => mount(),
+      register: (entry: { name: string }, component: unknown) => {
+        if (entry.name === 'settings.plugin.item') Settings = component as ComponentType<Record<string, never>>
+        return () => {}
+      },
+    } as never)
+    const fiber = ctx.plugin({ apply, inject: clientServices })
+    try {
+      await fiber
+      expect(Settings).toBeDefined()
+      render(Settings === undefined ? null : <Settings />)
+      await act(async () => { await Promise.resolve() })
+      fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+      fireEvent.click(screen.getByRole('checkbox', { name: '启用模型润色' }))
+      expect(modelCatalog).toHaveBeenCalledOnce()
+      expect(screen.getByRole('option', { name: 'GPT Test · Codex' })).not.toBeNull()
+    } finally {
+      cleanup()
+      await fiber.dispose()
+      await remoteFiber.dispose()
+    }
   })
 
   it('uses host theme tokens without a fixed dark fallback', () => {

@@ -98,7 +98,7 @@ interface ModelReference {
 }
 
 /** Client services used by the composer contribution. */
-export const inject = ['connection', 'slots', 'remote.session']
+export const inject = ['connection', 'slots', 'remote', 'remote.session']
 
 /** Encode provider and model as an opaque select value without delimiter assumptions. */
 export function encodeModelReference(reference: ModelReference): string {

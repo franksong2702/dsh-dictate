@@ -122,11 +122,20 @@ try {
     loadBundle: async () => { vm.runInNewContext(readFileSync(join(root, 'lib/client.js'), 'utf8'), sandbox) },
   })
   const client = await loader.import('dsh-dictate')
-  assert.deepEqual(Array.from(client.inject), ['connection', 'slots', 'remote.session'])
+  assert.deepEqual(Array.from(client.inject), ['connection', 'slots', 'remote', 'remote.session'])
   const clientCtx = new cordis.Context()
   await mount(clientCtx, SlotRegistry)
   clientCtx.provide('connection', { rpc: { call() { throw new Error('No network calls expected during registration') } } })
-  clientCtx.provide('remote.session', { modelCatalog() { throw new Error('No model query expected before settings render') } })
+  let modelCatalogCalls = 0
+  // Sibling services preserve Cordis injection checks; root-provided mocks do not.
+  await mount(clientCtx, scope => {
+    const session = { async modelCatalog() {
+      modelCatalogCalls++
+      return { ok: true, value: { groups: [{ id: 'fixture', name: 'Fixture', models: [{ id: 'model', name: 'Model' }] }], failures: [] } }
+    } }
+    scope.provide('remote', { session })
+    scope.provide('remote.session', session)
+  })
   const seats = ['conversation.input.right', 'conversation.input.overlay', 'settings.plugin.item']
   clientCtx.slots.register({ name: 'root', children: {
     'conversation.input.right': { kind: 'list', scope: 'session' },
@@ -135,6 +144,12 @@ try {
   } }, () => null)
   const clientFiber = await mount(clientCtx, client)
   for (const seat of seats) assert.equal(clientCtx.slots.entries(seat).length, 1, `Missing plugin slot: ${seat}`)
+  assert.equal(modelCatalogCalls, 0, 'Model query must wait for settings render')
+  const settings = clientCtx.slots.entries('settings.plugin.item')[0].component()
+  const modelOptions = await settings.props.loadModels()
+  assert.equal(modelCatalogCalls, 1)
+  assert.equal(JSON.stringify(modelOptions), JSON.stringify([{ value: '["fixture","model"]', label: 'Model · Fixture' }]))
+  checks.push('built settings contribution reads model catalog across sibling Cordis service boundary')
   await clientFiber.dispose()
   for (const seat of seats) assert.equal(clientCtx.slots.entries(seat).length, 0, `Leaked plugin slot: ${seat}`)
   checks.push('real upstream module loader + Cordis + SlotRegistry: built client materialized, 3 slots registered and unloaded')
