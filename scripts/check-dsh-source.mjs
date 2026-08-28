@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const { values } = parseArgs({ options: { source: { type: 'string' }, tools: { type: 'string' } } })
-assert(values.source, 'Usage: check-dsh-source --source <built-upstream-checkout> [--tools <node_modules>]')
+const { values } = parseArgs({ options: { source: { type: 'string' }, tools: { type: 'string' }, 'report-dir': { type: 'string' } } })
+assert(values.source, 'Usage: check-dsh-source --source <built-upstream-checkout> [--tools <node_modules>] [--report-dir <directory>]')
 const source = realpathSync(values.source)
 const tools = realpathSync(values.tools ?? join(root, 'node_modules'))
 const compatibility = JSON.parse(readFileSync(join(root, 'compatibility.json'), 'utf8'))
@@ -25,6 +25,8 @@ function git(args) {
 assert.equal(git(['rev-parse', 'HEAD']), expectedSha, 'Wrong upstream commit')
 assert.equal(git(['status', '--porcelain', '--untracked-files=no']), '', 'Upstream tracked files changed')
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-dictate-source-')))
+const evidence = values['report-dir'] ? resolve(values['report-dir']) : work
+mkdirSync(evidence, { recursive: true })
 const fixture = join(work, 'plugin')
 mkdirSync(fixture)
 for (const entry of ['src', 'tests', 'scripts', 'native', 'docs', '.github', 'package.json', 'compatibility.json', 'tsconfig.json', 'tsdown.config.ts', 'cordis.patch.yml', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) {
@@ -72,13 +74,17 @@ for (const name of manifest.dsh.client.inject) {
 assert(!existsSync(join(modules, '@deepseek-ai/dsh-client-runtime')))
 assert(!existsSync(join(modules, '@deepseek-ai/dsh-host-apiproxy')))
 
-const report = { upstreamCommit: expectedSha, dshVersion: compatibility.dshPluginApi.version, fixture, linkedPackages: packages.size, steps: [], npmArtifactsVerified: false, realMicrophoneVerified: false }
+const pluginGit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' })
+const report = { upstreamCommit: expectedSha, pluginCommit: pluginGit.status === 0 ? pluginGit.stdout.trim() : null, nodeVersion: process.version, dshVersion: compatibility.dshPluginApi.version, fixture, linkedPackages: packages.size, status: 'running', steps: [], npmArtifactsVerified: false, realMicrophoneVerified: false }
+const saveReport = () => writeFileSync(join(evidence, 'report.json'), JSON.stringify(report, null, 2) + '\n')
+saveReport()
 function run(stage, command, args) {
   const result = spawnSync(command, args, { cwd: fixture, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, DSH_HOME: join(work, 'dsh-home'), DSH_TELEMETRY_MODE: 'DISABLED' } })
-  const log = join(work, `${stage}.log`)
+  const log = join(evidence, `${stage}.log`)
   writeFileSync(log, (result.stdout ?? '') + (result.stderr ?? '') + (result.error?.message ?? ''))
   report.steps.push({ stage, command: [command, ...args], exitCode: result.status, log })
-  writeFileSync(join(work, 'report.json'), JSON.stringify(report, null, 2) + '\n')
+  if (result.status !== 0) report.status = 'failed'
+  saveReport()
   console.log(`${stage}: exit ${result.status}; ${log}`)
   assert.equal(result.status, 0, `Failed ${stage}:\n${result.stdout}\n${result.stderr}\n${result.error ?? ''}`)
 }
@@ -91,4 +97,7 @@ run('package', process.execPath, ['scripts/verify-package.mjs'])
 run('source-smoke', process.execPath, ['scripts/smoke-dsh-source.mjs', source])
 run('canary-contract', process.execPath, ['scripts/check-dsh-next-contract.mjs'])
 run('canary-workflow', process.execPath, ['scripts/check-canary-workflow.mjs'])
-console.log(`Source-only verification passed: ${join(work, 'report.json')}`)
+run('source-workflow', process.execPath, ['scripts/check-source-workflow.mjs'])
+report.status = 'passed'
+saveReport()
+console.log(`Source-only verification passed: ${join(evidence, 'report.json')}`)

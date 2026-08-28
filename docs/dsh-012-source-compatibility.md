@@ -31,9 +31,9 @@ Observed on 2026-08-28 (Node v26.5.0):
 | Check | Result |
 |---|---|
 | Upstream build | Exit 0; 218 client artifacts recorded |
-| Source checker | Exit 0; all 8 stages exit 0 |
+| Source checker (before the CI addition below) | Exit 0; all 8 stages exit 0 |
 | Typecheck, declaration generation, client bundle and package contents | Passed |
-| Plugin regression tests | 6 test files; 129/129 tests passed |
+| Plugin regression tests (including the parent Remote injection fix) | 6 test files; 130/130 tests passed |
 | Real upstream Connection | Token exchange 303; anonymous request 401; untrusted Origin/Host 403 |
 | Authenticated custom RPC | Polish/terms success, invalid input rejection, isolated settings persistence |
 | Real upstream module loader, Cordis and SlotRegistry | Built client materialized; all 3 plugin slots registered and unloaded |
@@ -46,6 +46,27 @@ The smoke test uses actual upstream Connection, browser authentication, FileSett
 Review objection: does removing `authority: 'trusted-host'` weaken protection, or merely satisfy a mocked test? The new Connection API no longer accepts that argument and centrally enforces Host/Origin and browser-session checks. The smoke test exercises the real upstream implementation and verifies both rejection and authenticated success. It does not establish real microphone or model end-to-end behavior.
 
 Confidence: high for the fixed-source API/loading checks and listed automated regressions only.
+
+## Independent pinned-source CI
+
+`.github/workflows/dsh-source-compat.yml` adds **Pinned DSH source compatibility** on pull requests and manual runs, independently of the existing npm CI. Each Node 22.19.0 / 24.15.0 job:
+
+1. Checks out the exact upstream commit declared above, never a moving branch or tag.
+2. Installs the unchanged toolchain lockfile from Dictate commit `6b86d280d796b6c87f0dbb3ba5688c36c0bcf557` with pnpm 9.15.9. This supplies build/test tools only; its DSH dependencies are excluded from the candidate fixture.
+3. Installs and builds upstream using its frozen lockfile and pnpm 11.7.0.
+4. Runs `check-dsh-source.mjs` against that source graph, including the additional dependency-free source-workflow contract check (nine stages in total).
+5. Uploads per-stage logs and `report.json` when available, including on failure. Reports record the upstream/plugin commits, Node version and result, with `npmArtifactsVerified: false` and `realMicrophoneVerified: false`.
+
+The workflow has read-only permissions, immutable action references, no persisted checkout credentials, no secrets, no publishing and no service startup. Logs are retained for 14 days. A green **source-only** check is not an npm installation or release approval. The original `.github/workflows/ci.yml` remains unchanged and still requires the candidate's own frozen-lockfile installation.
+
+Local reproduction with a built source checkout and locked tools:
+
+```sh
+node scripts/check-source-workflow.mjs
+node scripts/check-dsh-source.mjs --source /path/to/built-upstream --tools /path/to/locked-tools/node_modules --report-dir /path/to/source-evidence
+```
+
+On 2026-08-28, the official npm registry returned `E404` for both `@deepseek-ai/dsh@0.1.2-alpha.1` and `@deepseek-ai/dsh-api-remotes@0.1.2-alpha.1`. An isolated lockfile regeneration failed with `ERR_PNPM_NO_MATCHING_VERSION` for `@deepseek-ai/dsh-typert-protocol@0.1.2-alpha.1`. The source workflow does not remove this blocker.
 
 ## Merge and release gates
 
