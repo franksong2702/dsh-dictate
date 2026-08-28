@@ -61,7 +61,8 @@ jobs:
         working-directory: .source-upstream
         run: npx --yes pnpm@11.7.0 run build 2>&1 | tee "$RUNNER_TEMP/dictate-source-evidence/upstream-build.log"
       - name: Verify Dictate against source, never the baseline DSH packages
-        run: node scripts/check-dsh-source.mjs --source .source-upstream --tools .source-toolchain/node_modules --report-dir "$RUNNER_TEMP/dictate-source-evidence" 2>&1 | tee "$RUNNER_TEMP/dictate-source-evidence/checker.log"
+        # npm exec exposes this pinned pnpm on PATH for the nested package check.
+        run: npx --yes --package=pnpm@9.15.9 -- node scripts/check-dsh-source.mjs --source .source-upstream --tools .source-toolchain/node_modules --report-dir "$RUNNER_TEMP/dictate-source-evidence" 2>&1 | tee "$RUNNER_TEMP/dictate-source-evidence/checker.log"
       - name: Upload source-only logs and report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

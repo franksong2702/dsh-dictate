@@ -54,7 +54,7 @@ Confidence: high for the fixed-source API/loading checks and listed automated re
 1. Checks out the exact upstream commit declared above, never a moving branch or tag.
 2. Installs the unchanged toolchain lockfile from Dictate commit `6b86d280d796b6c87f0dbb3ba5688c36c0bcf557` with pnpm 9.15.9. This supplies build/test tools only; its DSH dependencies are excluded from the candidate fixture.
 3. Installs and builds upstream using its frozen lockfile and pnpm 11.7.0.
-4. Runs `check-dsh-source.mjs` against that source graph, including the additional dependency-free source-workflow contract check (nine stages in total).
+4. Runs `check-dsh-source.mjs` against that source graph, including the additional dependency-free source-workflow contract check (nine stages in total). `npm exec` exposes pinned pnpm 9.15.9 on PATH for nested package verification; no preinstalled global pnpm is assumed.
 5. Uploads per-stage logs and `report.json` when available, including on failure. Reports record the upstream/plugin commits, Node version and result, with `npmArtifactsVerified: false` and `realMicrophoneVerified: false`.
 
 The workflow has read-only permissions, immutable action references, no persisted checkout credentials, no secrets, no publishing and no service startup. Logs are retained for 14 days. A green **source-only** check is not an npm installation or release approval. The original `.github/workflows/ci.yml` remains unchanged and still requires the candidate's own frozen-lockfile installation.

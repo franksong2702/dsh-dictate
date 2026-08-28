@@ -27,6 +27,7 @@ check(workflow.includes('npx --yes pnpm@9.15.9 install --frozen-lockfile --ignor
 check(workflow.includes('npx --yes pnpm@11.7.0 install --frozen-lockfile --ignore-scripts'), 'Keep upstream graph locked')
 check(workflow.includes('npx --yes pnpm@11.7.0 run build'), 'Build upstream before verifying the candidate')
 check(workflow.includes('node scripts/check-dsh-source.mjs --source .source-upstream --tools .source-toolchain/node_modules --report-dir'), 'Exercise the actual isolated source checker')
+check(workflow.includes('npx --yes --package=pnpm@9.15.9 -- node scripts/check-dsh-source.mjs'), 'Expose pinned pnpm on PATH for nested package verification')
 check(workflow.includes('if: always()') && workflow.includes('actions/upload-artifact@') && workflow.includes('retention-days: 14'), 'Preserve bounded evidence on success and failure')
 check(workflow.includes('not npm installability'), 'Do not imply npm installation readiness')
 check(npmWorkflow.includes('pnpm install --frozen-lockfile') && !/continue-on-error:|if:/.test(npmWorkflow), 'Do not bypass the separate npm CI gate')
