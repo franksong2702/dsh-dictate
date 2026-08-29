@@ -1,6 +1,13 @@
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { LANGUAGE_OPTIONS, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
+import {
+  addDictionaryTerm,
+  loadDictionary,
+  normalizeDictionaryTerm,
+  removeDictionaryTerm,
+  subscribeDictionary,
+} from './dictionaryStore.ts'
 import type {
   LocalServiceAutoStartSettings,
   LocalServiceInstallStatus,
@@ -76,6 +83,8 @@ export function SettingsPanel({
   localService,
 }: SettingsPanelProps = {}): ReactNode {
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
+  const dictionary = useSyncExternalStore(subscribeDictionary, loadDictionary, () => loadDictionary())
+  const [dictionaryDraft, setDictionaryDraft] = useState('')
   const localInstaller = localService?.install
   const [open, setOpen] = useState(false)
   const [serviceStatus, setServiceStatus] = useState<LocalServiceStatus>()
@@ -560,6 +569,76 @@ export function SettingsPanel({
           <h4 style={{ margin: '20px 0 10px', paddingTop: 16, borderTop: '1px solid var(--dsw-alias-border-l2)', fontSize: 13, lineHeight: 1.5 }}>
             上下文增强
           </h4>
+          <div style={{ display: 'grid', gap: 8, maxWidth: 520 }}>
+            <strong style={{ fontSize: 13, lineHeight: 1.5 }}>自定义词典</strong>
+            <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+              只保存你明确确认的词语，用于后续语音识别和模型润色。词典保存在当前浏览器的 DSH 配置中，可随时删除。
+            </p>
+            <form
+              onSubmit={event => {
+                event.preventDefault()
+                const term = normalizeDictionaryTerm(dictionaryDraft)
+                if (term === undefined) return
+                addDictionaryTerm(term)
+                setDictionaryDraft('')
+              }}
+              style={{ display: 'flex', gap: 8 }}
+            >
+              <input
+                aria-label="添加自定义词语"
+                value={dictionaryDraft}
+                maxLength={64}
+                placeholder="例如 Codex Connect"
+                onChange={event => { setDictionaryDraft(event.currentTarget.value) }}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: 34,
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                  borderRadius: 8,
+                  padding: '0 10px',
+                  background: 'var(--dsw-alias-bg-layer-3)',
+                  color: 'var(--dsw-alias-label-primary)',
+                  font: 'inherit',
+                }}
+              />
+              <button type="submit" disabled={dictionaryDraft.trim() === ''}>添加</button>
+            </form>
+            {dictionary.terms.length === 0 ? (
+              <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>还没有保存词语</span>
+            ) : (
+              <ul
+                aria-label="已保存的自定义词语"
+                style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: 0, padding: 0, listStyle: 'none' }}
+              >
+                {dictionary.terms.map(term => (
+                  <li
+                    key={term.toLocaleLowerCase('en-US')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      padding: '4px 5px 4px 9px',
+                      border: '1px solid var(--dsw-alias-border-l2)',
+                      borderRadius: 999,
+                      fontSize: 12,
+                    }}
+                  >
+                    <span>{term}</span>
+                    <button
+                      type="button"
+                      aria-label={`删除 ${term}`}
+                      title={`删除 ${term}`}
+                      onClick={() => { removeDictionaryTerm(term) }}
+                      style={{ minWidth: 24, minHeight: 24, padding: 0, border: 0, background: 'transparent', cursor: 'pointer' }}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
               htmlFor="dictate-model-polish"

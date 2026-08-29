@@ -12,6 +12,11 @@ import {
   VoiceInputButton,
 } from '../src/client/index.tsx'
 import { loadPrefs, normalizePrefs, updatePrefs } from '../src/client/prefs.ts'
+import {
+  addDictionaryTerm,
+  loadDictionary,
+  resetDictionaryStoreForTests,
+} from '../src/client/dictionaryStore.ts'
 import type { ContextTerm } from '../src/terms.ts'
 import type { AsrProvider, AsrProviderStartOptions } from '../src/client/asrProvider.ts'
 
@@ -98,6 +103,7 @@ describe('Contextual Dictation browser plugin', () => {
     vi.useFakeTimers()
     FakeRecognition.instances = []
     Object.defineProperty(window, 'localStorage', { configurable: true, value: new MemoryStorage() })
+    resetDictionaryStoreForTests()
     Object.defineProperty(window.navigator, 'userAgent', { configurable: true, value: DEFAULT_USER_AGENT })
     window.SpeechRecognition = FakeRecognition
     window.SpeechRecognitionPhrase = undefined
@@ -202,6 +208,36 @@ describe('Contextual Dictation browser plugin', () => {
     render(<SettingsPanel />)
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
     expect((screen.getByLabelText('识别语言') as HTMLSelectElement).value).toBe('ja-JP')
+  })
+
+  it('adds and removes explicit dictionary terms from plugin settings', () => {
+    render(<SettingsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    const input = screen.getByRole('textbox', { name: '添加自定义词语' })
+    fireEvent.change(input, { target: { value: 'Codex Connect' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加' }))
+
+    expect(loadDictionary().terms).toEqual(['Codex Connect'])
+    expect(screen.getByRole('list', { name: '已保存的自定义词语' })).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '删除 Codex Connect' }))
+    expect(loadDictionary().terms).toEqual([])
+    expect(screen.getByText('还没有保存词语')).not.toBeNull()
+  })
+
+  it('biases the next supported Web Speech recording with confirmed dictionary terms', () => {
+    window.SpeechRecognitionPhrase = FakeSpeechRecognitionPhrase
+    addDictionaryTerm('Codex Connect')
+    render(voiceSurfaces({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'dictionary-recognition',
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    expect(recognition?.phrasesAtStart).toEqual([
+      expect.objectContaining({ phrase: 'Codex Connect', boost: 6 }),
+    ])
   })
 
   it('normalizes legacy language-only preferences and new model fields', () => {
@@ -576,6 +612,38 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.queryByRole('status')).not.toBeNull()
     act(() => { vi.advanceTimersByTime(1) })
     expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('waits for completion to retract, then asks before remembering one edited technical term', () => {
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    const props = {
+      inputActions: { setDraft, submit },
+      input: { draft: '' },
+      sessionId: 'dictionary-suggestion',
+    }
+    const view = render(voiceSurfaces(props))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.onstart?.() })
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => { recognition?.finishWith('帮我检查扣代克斯康耐克特') })
+
+    view.rerender(voiceSurfaces({
+      ...props,
+      input: { draft: '帮我检查Codex Connect' },
+    }))
+    act(() => { vi.advanceTimersByTime(4_299) })
+    expect(screen.queryByText('发现新词汇')).toBeNull()
+    act(() => { vi.advanceTimersByTime(1) })
+
+    expect(screen.getByText('发现新词汇')).not.toBeNull()
+    expect(screen.getByText(/Codex Connect/)).not.toBeNull()
+    expect(loadDictionary().terms).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: '记住' }))
+    expect(loadDictionary().terms).toEqual(['Codex Connect'])
+    expect(screen.getByText('已加入词典')).not.toBeNull()
+    expect(submit).not.toHaveBeenCalled()
   })
 
   it('keeps an error visible until the user starts a new recording', () => {

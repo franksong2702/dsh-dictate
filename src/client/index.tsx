@@ -11,6 +11,16 @@ import {
 } from './TranscriptionDock.tsx'
 import { DEFAULT_LOCAL_ENDPOINT, loadPrefs, subscribePrefs, updatePrefs } from './prefs.ts'
 import {
+  DICTIONARY_EDIT_DEBOUNCE_MS,
+  DICTIONARY_EDIT_WINDOW_MS,
+  detectDictionaryCandidate,
+} from './dictionaryCandidate.ts'
+import {
+  addDictionaryTerm,
+  dictionaryContextTerms,
+  loadDictionary,
+} from './dictionaryStore.ts'
+import {
   checkLocalEndpoint as checkLocalEndpointHealth,
   createLocalEndpointProvider,
 } from './localEndpointProvider.ts'
@@ -32,6 +42,7 @@ import {
   type TranscriptionTimelineEvent,
 } from './transcriptionStore.ts'
 import {
+  CONTEXT_TERM_LIMIT,
   parseContextTerms,
   type ContextTerm,
   type ContextTermsRequest,
@@ -122,6 +133,22 @@ export function joinRecognitionSegments(segments: readonly string[], lang: strin
   return values.join(/^(?:zh|ja|ko)(?:-|$)/i.test(lang) ? '' : ' ')
 }
 
+/** Merge persistent and temporary terms while preserving source priority and bounds. */
+export function mergeContextTerms(...groups: ReadonlyArray<readonly ContextTerm[]>): readonly ContextTerm[] {
+  const merged: ContextTerm[] = []
+  const seen = new Set<string>()
+  for (const group of groups) {
+    for (const term of group) {
+      const key = term.text.toLocaleLowerCase('en-US')
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(term)
+      if (merged.length >= CONTEXT_TERM_LIMIT) return merged
+    }
+  }
+  return merged
+}
+
 function rightModifierCode(userAgent: string): 'MetaRight' | 'ControlRight' {
   return /\bMacintosh\b|\bMac OS X\b/i.test(userAgent) ? 'MetaRight' : 'ControlRight'
 }
@@ -143,6 +170,8 @@ const WEB_SPEECH_PROVIDER = createWebSpeechProvider()
 export const DICTATION_WARNING_MS = 8 * 60 * 1_000
 export const DICTATION_MAX_DURATION_MS = 9 * 60 * 1_000
 export const MEANINGFUL_TRANSCRIPTION_STAGE_MS = 3_000
+export const DICTIONARY_PROMPT_GAP_MS = 300
+export const DICTIONARY_PROMPT_VISIBLE_MS = 8_000
 
 const COUNTDOWN_ANNOUNCEMENT_SECONDS = new Set([60, 30, 10, 5, 4, 3, 2, 1])
 
@@ -332,6 +361,15 @@ export function VoiceInputButton({
   const deadlineTimerRef = useRef<number>()
   const dictationStartedAtRef = useRef<number>()
   const recordingElapsedMsRef = useRef<number | null>(null)
+  const dictionaryEditDebounceRef = useRef<number>()
+  const dictionaryPromptTimerRef = useRef<number>()
+  const dictionaryEditRef = useRef<{
+    readonly prefix: string
+    readonly transcript: string
+    readonly expectedDraft: string
+    readonly completedAt: number
+    handled: boolean
+  }>()
   const countdownActiveRef = useRef(false)
   const finalizingStartedAtRef = useRef<number>()
   const polishAbortRef = useRef<AbortController>()
@@ -423,6 +461,12 @@ export function VoiceInputButton({
     countdownTimerRef.current = undefined
     deadlineTimerRef.current = undefined
     countdownActiveRef.current = false
+  }
+  const clearDictionaryTimers = (): void => {
+    if (dictionaryEditDebounceRef.current !== undefined) window.clearTimeout(dictionaryEditDebounceRef.current)
+    if (dictionaryPromptTimerRef.current !== undefined) window.clearTimeout(dictionaryPromptTimerRef.current)
+    dictionaryEditDebounceRef.current = undefined
+    dictionaryPromptTimerRef.current = undefined
   }
 
   const currentRecordingElapsedMs = (): number | null => {
@@ -562,6 +606,7 @@ export function VoiceInputButton({
       hint: detail,
       announcement: `${title}。${detail}`,
       action: null,
+      secondaryAction: null,
     })
     if (!error) {
       messageTimerRef.current = window.setTimeout(() => {
@@ -571,10 +616,69 @@ export function VoiceInputButton({
     }
   }
 
+  const showDictionarySuggestion = (term: string): void => {
+    clearMessageTimer()
+    const edit = dictionaryEditRef.current
+    if (edit === undefined || edit.handled) return
+    edit.handled = true
+    const finish = (remember: boolean): void => {
+      clearDictionaryTimers()
+      if (remember) addDictionaryTerm(term)
+      showTransientMessage(
+        remember ? '已加入词典' : '本次已忽略',
+        remember ? `${term} 将用于后续识别和润色` : '没有保存任何新词',
+      )
+    }
+    updateTranscription(sessionId, {
+      phase: 'dictionary',
+      finalText: '',
+      interimText: '',
+      status: '发现新词汇',
+      hint: `${term} · 是否在当前配置中记住？`,
+      announcement: `发现新词汇。${term}。是否记住`,
+      secondaryAction: { label: '忽略', run: () => { finish(false) } },
+      action: { label: '记住', run: () => { finish(true) } },
+    })
+    messageTimerRef.current = window.setTimeout(() => {
+      finish(false)
+    }, DICTIONARY_PROMPT_VISIBLE_MS)
+  }
+
+  useEffect(() => {
+    if (dictionaryEditDebounceRef.current !== undefined) {
+      window.clearTimeout(dictionaryEditDebounceRef.current)
+      dictionaryEditDebounceRef.current = undefined
+    }
+    const edit = dictionaryEditRef.current
+    if (edit === undefined || edit.handled || input.draft === edit.expectedDraft
+      || Date.now() - edit.completedAt > DICTIONARY_EDIT_WINDOW_MS
+      || !input.draft.startsWith(edit.prefix)) return
+    const editedTranscript = input.draft.slice(edit.prefix.length)
+    dictionaryEditDebounceRef.current = window.setTimeout(() => {
+      dictionaryEditDebounceRef.current = undefined
+      const term = detectDictionaryCandidate(edit.transcript, editedTranscript)
+      if (term === undefined || loadDictionary().terms.some(saved =>
+        saved.toLocaleLowerCase('en-US') === term.toLocaleLowerCase('en-US'))) return
+      const elapsed = Date.now() - edit.completedAt
+      const delay = Math.max(0, TRANSCRIPTION_COMPLETE_VISIBLE_MS + DICTIONARY_PROMPT_GAP_MS - elapsed)
+      dictionaryPromptTimerRef.current = window.setTimeout(() => {
+        dictionaryPromptTimerRef.current = undefined
+        showDictionarySuggestion(term)
+      }, delay)
+    }, DICTIONARY_EDIT_DEBOUNCE_MS)
+    return () => {
+      if (dictionaryEditDebounceRef.current !== undefined) {
+        window.clearTimeout(dictionaryEditDebounceRef.current)
+        dictionaryEditDebounceRef.current = undefined
+      }
+    }
+  }, [input.draft, sessionId])
+
   useEffect(() => () => {
     clearMessageTimer()
     clearPermissionStatusTimer()
     clearDictationTimers()
+    clearDictionaryTimers()
     clearTermsDebounce()
     startAbortRef.current?.abort()
     startAbortRef.current = undefined
@@ -592,6 +696,7 @@ export function VoiceInputButton({
     finalizingStartedAtRef.current = undefined
     dictationStartedAtRef.current = undefined
     recordingElapsedMsRef.current = null
+    dictionaryEditRef.current = undefined
     resetTranscription(sessionId)
   }, [sessionId])
 
@@ -633,13 +738,31 @@ export function VoiceInputButton({
     shouldLoadContextTerms,
   ])
 
-  const insertTranscript = (transcript: string, allowAutomaticSend: boolean): void => {
+  const insertTranscript = (transcript: string, allowAutomaticSend: boolean): {
+    readonly prefix: string
+    readonly nextDraft: string
+  } => {
     const current = draftRef.current.trim()
     const prefix = current === '' ? '' : `${draftRef.current} `
     const nextDraft = `${prefix}${transcript}`
     draftRef.current = nextDraft
     actionsRef.current.setDraft(nextDraft)
     if (allowAutomaticSend) actionsRef.current.submit()
+    return { prefix, nextDraft }
+  }
+
+  const rememberEditableResult = (
+    insertion: { readonly prefix: string; readonly nextDraft: string },
+    transcript: string,
+    allowAutomaticSend: boolean,
+  ): void => {
+    dictionaryEditRef.current = allowAutomaticSend ? undefined : {
+      prefix: insertion.prefix,
+      expectedDraft: insertion.nextDraft,
+      transcript,
+      completedAt: Date.now(),
+      handled: false,
+    }
   }
 
   const termsForPolish = (selected: ModelReference): readonly ContextTerm[] => {
@@ -650,16 +773,17 @@ export function VoiceInputButton({
       model: selected,
     }
     const key = contextTermsKey(request, input.phase)
-    if (contextTermsKeyRef.current === key) return contextTermsRef.current
-    return []
+    const temporary = contextTermsKeyRef.current === key ? contextTermsRef.current : []
+    return mergeContextTerms(dictionaryContextTerms(), temporary)
   }
 
   const finishTranscript = async (transcript: string, allowAutomaticSend: boolean): Promise<void> => {
     const selected = selectedModel
     if (!prefs.modelPolishEnabled || polish === undefined || selected === undefined) {
       finishFinalizingStage(false)
-      insertTranscript(transcript, allowAutomaticSend)
+      const insertion = insertTranscript(transcript, allowAutomaticSend)
       const polishUnavailable = prefs.modelPolishEnabled && selected === undefined
+      if (!polishUnavailable) rememberEditableResult(insertion, transcript, allowAutomaticSend)
       showTransientMessage(
         polishUnavailable ? '润色未完成' : '已转写完成',
         allowAutomaticSend
@@ -699,7 +823,8 @@ export function VoiceInputButton({
         terms,
       }, controller.signal)
       if (controller.signal.aborted) return
-      insertTranscript(text, allowAutomaticSend)
+      const insertion = insertTranscript(text, allowAutomaticSend)
+      rememberEditableResult(insertion, text, allowAutomaticSend)
       showTransientMessage(
         '已润色完成',
         allowAutomaticSend ? '最终结果已直接发送' : '最终结果已写入输入框',
@@ -783,6 +908,8 @@ export function VoiceInputButton({
     clearMessageTimer()
     clearPermissionStatusTimer()
     clearDictationTimers()
+    clearDictionaryTimers()
+    dictionaryEditRef.current = undefined
     dictationStartedAtRef.current = undefined
     recordingElapsedMsRef.current = null
     resetTranscription(sessionId)
@@ -841,7 +968,10 @@ export function VoiceInputButton({
 
     const startOptions: AsrProviderStartOptions = {
       lang: prefs.lang,
-      terms: (cachedTerms ?? []) as readonly AsrContextTerm[],
+      terms: mergeContextTerms(
+        dictionaryContextTerms(),
+        cachedTerms ?? [],
+      ) as readonly AsrContextTerm[],
       signal: controller.signal,
       onStart: () => {
         clearMessageTimer()

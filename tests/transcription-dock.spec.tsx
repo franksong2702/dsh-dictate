@@ -258,6 +258,30 @@ describe('TranscriptionDock', () => {
     expect(css).not.toContain('100% { opacity: 0; }')
   })
 
+  it('slides one dictionary prompt up and exposes explicit choices', () => {
+    const remember = vi.fn()
+    const ignore = vi.fn()
+    updateTranscription('dock-render', {
+      phase: 'dictionary',
+      status: '发现新词汇',
+      hint: 'Codex Connect · 是否在当前配置中记住？',
+      action: { label: '记住', run: remember },
+      secondaryAction: { label: '忽略', run: ignore },
+    })
+
+    render(<TranscriptionDock sessionId="dock-render" />)
+    const dock = screen.getByTestId('transcription-dock')
+    const css = document.querySelector('style')?.textContent ?? ''
+    expect(dock.className).toContain('dsh-dictate-phase-dictionary')
+    expect(screen.getByText('发现新词汇')).not.toBeNull()
+    expect(screen.getByText(/Codex Connect/)).not.toBeNull()
+    expect(css).toContain('dsh-dictate-dictionary-in 220ms')
+    fireEvent.click(screen.getByRole('button', { name: '记住' }))
+    fireEvent.click(screen.getByRole('button', { name: '忽略' }))
+    expect(remember).toHaveBeenCalledOnce()
+    expect(ignore).toHaveBeenCalledOnce()
+  })
+
   it('marks the polishing transcript as provisional and explains its destination', () => {
     updateTranscription('dock-render', {
       phase: 'polishing',

@@ -6,6 +6,7 @@ export type TranscriptionPhase =
   | 'finalizing'
   | 'polishing'
   | 'complete'
+  | 'dictionary'
   | 'error'
 
 /** One meaningful point retained in the session's voice-status timeline. */
@@ -32,6 +33,7 @@ export interface TranscriptionSnapshot {
   readonly status: string
   readonly hint: string
   readonly action: TranscriptionAction | null
+  readonly secondaryAction: TranscriptionAction | null
   readonly recordingElapsedMs: number | null
   readonly announcement: string
   readonly history: readonly TranscriptionTimelineEvent[]
@@ -48,6 +50,7 @@ export const EMPTY_TRANSCRIPTION: TranscriptionSnapshot = Object.freeze({
   status: '',
   hint: '',
   action: null,
+  secondaryAction: null,
   recordingElapsedMs: null,
   announcement: '',
   history: EMPTY_TIMELINE,
@@ -160,6 +163,9 @@ export function updateTranscription(
     status: patch.status ?? previous.status,
     hint: patch.hint ?? previous.hint,
     action: 'action' in patch ? patch.action ?? null : previous.action,
+    secondaryAction: 'secondaryAction' in patch
+      ? patch.secondaryAction ?? null
+      : previous.secondaryAction,
     recordingElapsedMs: 'recordingElapsedMs' in patch
       ? patch.recordingElapsedMs ?? null
       : previous.recordingElapsedMs,
@@ -169,6 +175,7 @@ export function updateTranscription(
   if (next.phase === previous.phase && next.finalText === previous.finalText
     && next.interimText === previous.interimText && next.status === previous.status
     && next.hint === previous.hint && next.action === previous.action
+    && next.secondaryAction === previous.secondaryAction
     && next.recordingElapsedMs === previous.recordingElapsedMs
     && next.announcement === previous.announcement
     && sameTimeline(next.history, previous.history)) {

@@ -27,7 +27,10 @@ function phaseTitle(snapshot: TranscriptionSnapshot): string {
       if (snapshot.status.includes('转写')) return '正在转写中'
       return '正在确认中'
     case 'polishing': return '正在润色中'
-    case 'complete': return snapshot.status.includes('润色') ? '已润色完成' : '已转写完成'
+    case 'complete':
+      if (snapshot.status === '已加入词典' || snapshot.status === '本次已忽略') return snapshot.status
+      return snapshot.status.includes('润色') ? '已润色完成' : '已转写完成'
+    case 'dictionary': return '发现新词汇'
     case 'error': return snapshot.status.includes('润色') ? '润色未完成' : '转写未完成'
     case 'idle': return ''
     default: {
@@ -54,6 +57,9 @@ function phaseIndicatorColor(snapshot: TranscriptionSnapshot): string {
   }
   if (snapshot.phase === 'complete') {
     return 'var(--dsw-alias-state-success-primary, #249b68)'
+  }
+  if (snapshot.phase === 'dictionary') {
+    return 'var(--dsw-alias-state-business-secondary, #7559d6)'
   }
   return 'var(--dsw-alias-state-business-primary, #356df3)'
 }
@@ -189,6 +195,10 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
             0%, 88% { transform: translateY(0); }
             100% { transform: translateY(calc(100% + 8px)); }
           }
+          @keyframes dsh-dictate-dictionary-in {
+            from { transform: translateY(calc(100% + 8px)); }
+            to { transform: translateY(0); }
+          }
           @keyframes dsh-dictate-indicator-breathe {
             0%, 100% { opacity: .2; transform: scale(1); }
             50% { opacity: 0; transform: scale(2.35); }
@@ -205,6 +215,9 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
           .dsh-dictate-timeline { animation: dsh-dictate-event-in 180ms ease-out; }
           .dsh-dictate-timeline-settled {
             animation: dsh-dictate-settled-out ${TRANSCRIPTION_COMPLETE_VISIBLE_MS}ms cubic-bezier(.2, .8, .2, 1) forwards;
+          }
+          .dsh-dictate-phase-dictionary {
+            animation: dsh-dictate-dictionary-in 220ms cubic-bezier(.2, .8, .2, 1) both;
           }
           .dsh-dictate-status-indicator {
             position: relative;
@@ -238,6 +251,7 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
           @media (prefers-reduced-motion: reduce) {
             .dsh-dictate-timeline,
             .dsh-dictate-timeline-settled,
+            .dsh-dictate-phase-dictionary,
             .dsh-dictate-status-indicator,
             .dsh-dictate-status-indicator::after { animation: none; }
           }
@@ -312,15 +326,26 @@ export function TranscriptionDock({ sessionId }: TranscriptionDockProps): ReactN
 
           {preview}
 
-          {snapshot.action !== null ? (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 12px 8px' }}>
-              <button
-                type="button"
-                onClick={snapshot.action.run}
-                style={{ pointerEvents: 'auto' }}
-              >
-                {snapshot.action.label}
-              </button>
+          {snapshot.action !== null || snapshot.secondaryAction !== null ? (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '0 12px 8px' }}>
+              {snapshot.secondaryAction !== null ? (
+                <button
+                  type="button"
+                  onClick={snapshot.secondaryAction.run}
+                  style={{ pointerEvents: 'auto' }}
+                >
+                  {snapshot.secondaryAction.label}
+                </button>
+              ) : null}
+              {snapshot.action !== null ? (
+                <button
+                  type="button"
+                  onClick={snapshot.action.run}
+                  style={{ pointerEvents: 'auto' }}
+                >
+                  {snapshot.action.label}
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
