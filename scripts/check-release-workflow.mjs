@@ -50,18 +50,20 @@ assertContract('input version is compared with package.json', /package_version[\
 assertContract('git tag target existence is checked before publishing', /git ls-remote --exit-code --refs origin "refs\/tags\/v\$\{VERSION\}"/.test(workflow))
 assertContract('GitHub release target existence is checked before publishing', /gh release view "v\$\{VERSION\}"/.test(workflow))
 
-const publishIndex = workflow.indexOf('npm publish --tag next --provenance')
+const packedArtifactPublish = 'npm publish "artifacts/${PACKAGE}-${VERSION}.tgz" --tag next --provenance'
+const publishIndex = workflow.indexOf(packedArtifactPublish)
 const packageCheckIndex = workflow.indexOf('pnpm run test:package')
 const nativeCheckIndex = workflow.indexOf('codesign --verify --strict')
 assertContract('package and native checks precede npm publish', packageCheckIndex >= 0 && nativeCheckIndex > packageCheckIndex && publishIndex > nativeCheckIndex)
-assertContract('publish uses npm OIDC provenance and next tag', publishIndex >= 0)
+assertContract('publish uses the already packed artifact with npm OIDC provenance and next tag', publishIndex >= 0)
 assertContract('an identical npm artifact can safely resume after publishing',
   /npm view "\$PACKAGE\@\$VERSION" version/.test(workflow)
     && /Existing npm version does not match this artifact and next tag; refusing unsafe resume/.test(workflow)
     && /npm already contains the identical/.test(workflow))
 assertContract('workflow never uses a long-lived-token-only dist-tag command', !/npm dist-tag/.test(workflow))
 assertContract('post-publish verification checks version, next tag, and artifact shasum',
-  /for attempt in 1 2 3 4 5 6/.test(workflow)
+  /for attempt in \{1\.\.30\}/.test(workflow)
+    && /sleep 10/.test(workflow)
     && /dist-tags\.next/.test(workflow)
     && /dist\.shasum/.test(workflow)
     && /local_shasum/.test(workflow))
