@@ -2,7 +2,7 @@
 
 The declared compatibility baseline remains explicit in `compatibility.json` and the package peer ranges. The upstream canary is a separate early-warning signal: it resolves one immutable snapshot of `@deepseek-ai/dsh@latest` and `@deepseek-ai/dsh@next`, then installs the packed `dsh-dictate` artifact into an isolated temporary DSH profile for every unique candidate that differs from the declared baseline.
 
-The canary checks package installation, DSH profile configuration, host-module imports, and the bundled client entry. It does not start a model provider, access OAuth, use a microphone, or require the optional local ASR runtime/model. Those are separate test-profile and release gates.
+The canary checks package installation, DSH profile configuration, the Web profile's help-only startup path, host-module imports, and the bundled client entry. The help probe lets the official launcher prepare its profile module fallback inside the temporary `DSH_HOME`, then requires app help with no server URL or stderr and does not enter Web server startup. It does not start a model provider, access OAuth, use a microphone, or require the optional local ASR runtime/model. Those are separate test-profile and release gates.
 
 ## Alert behavior
 

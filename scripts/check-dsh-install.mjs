@@ -212,6 +212,19 @@ async function main() {
       throw new CompatibilityCheckError('dsh-dictate was not registered in the DSH profile')
     }
 
+    // Config dumps intentionally avoid runtime setup. Boot the profile's help
+    // path so the official launcher prepares its module fallback without
+    // opening a port, model provider, browser, or microphone.
+    const profileProbe = await runCommand(dshBinary, [
+      '--profile', 'web', '--help',
+    ], { cwd: workspace, env })
+    requireSuccess('web profile compatibility probe', profileProbe, 'compatibility')
+    if (!profileProbe.stdout.includes('Usage: dsh --profile web')
+      || profileProbe.stdout.includes('dsh web: http://')
+      || profileProbe.stderr.trim() !== '') {
+      throw new CompatibilityCheckError('web profile compatibility probe did not remain on the help-only path')
+    }
+
     const hostImport = await runCommand(process.execPath, [
       '--input-type=module',
       '-e',
@@ -232,6 +245,7 @@ async function main() {
       nodeVersion: process.version,
       plugin: 'dsh-dictate',
       profileRegistered: true,
+      profilePrepared: true,
       hostExports: hostReport.hostExports,
       clientWrapper: true,
       localAsr: 'excluded-from-upstream-canary',

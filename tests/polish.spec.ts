@@ -184,14 +184,13 @@ describe('model transcript polishing', () => {
     })).rejects.toThrow('model polish produced no text')
   })
 
-  it('registers a trusted-host RPC and returns the polished text', async () => {
+  it('registers an authenticated Connection RPC and returns the polished text', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'dsh-dictate-host-'))
     temporaryRoots.push(dshHome)
     vi.stubEnv('DSH_HOME', dshHome)
     let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined
-    const handle = vi.fn((_channel, next, options) => {
+    const handle = vi.fn((_channel, next) => {
       handler = next
-      expect(options).toEqual({ authority: 'trusted-host' })
       return () => Promise.resolve()
     })
     const ctx = {
@@ -204,7 +203,7 @@ describe('model transcript polishing', () => {
     }
     apply(ctx as never)
 
-    expect(handle).toHaveBeenCalledWith('/dictate', expect.any(Function), { authority: 'trusted-host' })
+    expect(handle).toHaveBeenCalledWith('/dictate', expect.any(Function))
     expect(ctx.inject).toHaveBeenCalledWith(['settings'], expect.any(Function))
     const signal = new AbortController().signal
     const termsResult = await handler?.('terms', {

@@ -3,10 +3,12 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps, ComponentType, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
 import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { TranscriptionDock } from '../src/client/TranscriptionDock.tsx'
 import {
   apply,
+  inject as clientServices,
   encodeModelReference,
   joinRecognitionSegments,
   VoiceInputButton,
@@ -93,6 +95,13 @@ function voiceComposer(props: ComponentProps<typeof VoiceInputButton>): ReactNod
   </div>
 }
 
+function contentEditableVoiceComposer(props: ComponentProps<typeof VoiceInputButton>): ReactNode {
+  return <div data-composer-card>
+    <div aria-label="Composer" contentEditable role="textbox" />
+    {voiceSurfaces(props)}
+  </div>
+}
+
 describe('Contextual Dictation browser plugin', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -123,6 +132,7 @@ describe('Contextual Dictation browser plugin', () => {
   })
 
   it('registers a card inside the Plugin configuration tab', () => {
+    expect(clientServices).toContain('remote.session')
     const register = vi.fn(() => vi.fn())
     const inject = vi.fn((name: string, mount: () => unknown) => { mount() })
 
@@ -149,18 +159,16 @@ describe('Contextual Dictation browser plugin', () => {
     })
     const inject = vi.fn((_name: string, mount: () => unknown) => { mount() })
     const models = vi.fn(() => Promise.resolve({
-      rpcId: 'models-1',
-      result: {
-        ok: true as const,
-        value: {
-          groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'chat', name: 'DeepSeek Chat' }] }],
-          failures: [],
-        },
+      ok: true as const,
+      value: {
+        groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'chat', name: 'DeepSeek Chat' }] }],
+        failures: [],
       },
     }))
     apply({
       slots: { inject, register },
-      connection: { api: { llm: { models } }, rpc: { call: vi.fn() } },
+      connection: { rpc: { call: vi.fn() } },
+      remote: { session: { modelCatalog: models } },
     } as never)
 
     const Settings = components[2]
@@ -173,6 +181,71 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.getByLabelText('润色模型')).not.toBeNull()
     expect(screen.getByRole('option', { name: 'DeepSeek Chat · DeepSeek' })).not.toBeNull()
     expect(models).toHaveBeenCalledOnce()
+    expect(models).toHaveBeenCalledWith()
+  })
+
+  it.each(['remote-error', 'transport-error'])('keeps settings usable when the Remote catalog fails: %s', async (failure) => {
+    let Settings: ComponentType<Record<string, never>> | undefined
+    const modelCatalog = vi.fn(() => failure === 'transport-error'
+      ? Promise.reject(new Error('transport unavailable'))
+      : Promise.resolve({ ok: false, error: { message: 'catalog unavailable' } }))
+    apply({
+      slots: {
+        inject: (_name: string, mount: () => unknown) => mount(),
+        register: (entry: { name: string }, component: unknown) => {
+          if (entry.name === 'settings.plugin.item') Settings = component as ComponentType<Record<string, never>>
+          return () => {}
+        },
+      },
+      connection: { rpc: { call: vi.fn() } },
+      remote: { session: { modelCatalog } },
+    } as never)
+    render(Settings === undefined ? null : <Settings />)
+    await act(async () => { await Promise.resolve() })
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+    expect(screen.getByLabelText('识别语言')).not.toBeNull()
+    expect(modelCatalog).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('option', { name: 'DeepSeek Chat · DeepSeek' })).toBeNull()
+  })
+
+  it('loads polishing models through a real Cordis plugin injection boundary', async () => {
+    const ctx = new Context()
+    let Settings: ComponentType<Record<string, never>> | undefined
+    const modelCatalog = vi.fn(async () => ({
+      ok: true as const,
+      value: { groups: [{ id: 'codex', name: 'Codex', models: [{ id: 'gpt-test', name: 'GPT Test' }] }], failures: [] },
+    }))
+    const session = { modelCatalog }
+    // Match the host: services belong to a sibling plugin, not the root.
+    // Root-provided values bypass the consumer's declared injection boundary.
+    const remoteFiber = ctx.plugin((scope) => {
+      scope.provide('remote', { session } as never)
+      scope.provide('remote.session', session)
+    })
+    await remoteFiber
+    ctx.provide('connection', { rpc: { call: vi.fn() } } as never)
+    ctx.provide('slots', {
+      inject: (_name: string, mount: () => unknown) => mount(),
+      register: (entry: { name: string }, component: unknown) => {
+        if (entry.name === 'settings.plugin.item') Settings = component as ComponentType<Record<string, never>>
+        return () => {}
+      },
+    } as never)
+    const fiber = ctx.plugin({ apply, inject: clientServices })
+    try {
+      await fiber
+      expect(Settings).toBeDefined()
+      render(Settings === undefined ? null : <Settings />)
+      await act(async () => { await Promise.resolve() })
+      fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+      fireEvent.click(screen.getByRole('checkbox', { name: '启用模型润色' }))
+      expect(modelCatalog).toHaveBeenCalledOnce()
+      expect(screen.getByRole('option', { name: 'GPT Test · Codex' })).not.toBeNull()
+    } finally {
+      cleanup()
+      await fiber.dispose()
+      await remoteFiber.dispose()
+    }
   })
 
   it('uses host theme tokens without a fixed dark fallback', () => {
@@ -1315,6 +1388,60 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(FakeRecognition.instances).toHaveLength(1)
     expect(FakeRecognition.instances[0]?.startCalls).toBe(1)
+  })
+
+  it('uses right Command on the Alpha.2 contenteditable Composer', () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+    })
+    updatePrefs({ composerShortcutEnabled: true })
+    render(contentEditableVoiceComposer({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'session-1',
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+    composer.focus()
+
+    fireEvent.keyDown(composer, { key: 'Meta', code: 'MetaRight', metaKey: true, location: 2 })
+    fireEvent.keyUp(composer, { key: 'Meta', code: 'MetaRight', location: 2 })
+
+    expect(FakeRecognition.instances).toHaveLength(1)
+    expect(FakeRecognition.instances[0]?.startCalls).toBe(1)
+  })
+
+  it('rejects unfocused, outside-card, and noneditable contenteditable targets', () => {
+    updatePrefs({ composerShortcutEnabled: true })
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    render(<>
+      <div data-composer-card>
+        <div aria-label="Composer" contentEditable role="textbox" />
+        <div aria-label="Noneditable" contentEditable={false} role="textbox" />
+        <div aria-label="No textbox role" contentEditable />
+        {voiceSurfaces({ inputActions, input: { draft: '' }, sessionId: 'session-1' })}
+      </div>
+      <div aria-label="Outside card" contentEditable role="textbox" />
+    </>)
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+    const noneditable = screen.getByRole('textbox', { name: 'Noneditable' })
+    const noTextboxRole = screen.getByLabelText('No textbox role')
+    const outsideCard = screen.getByRole('textbox', { name: 'Outside card' })
+    const pressRightCommand = (target: HTMLElement): void => {
+      fireEvent.keyDown(target, { key: 'Meta', code: 'MetaRight', metaKey: true, location: 2 })
+      fireEvent.keyUp(target, { key: 'Meta', code: 'MetaRight', location: 2 })
+    }
+
+    outsideCard.focus()
+    pressRightCommand(composer)
+    noneditable.focus()
+    pressRightCommand(noneditable)
+    noTextboxRole.focus()
+    pressRightCommand(noTextboxRole)
+    outsideCard.focus()
+    pressRightCommand(outsideCard)
+
+    expect(FakeRecognition.instances).toHaveLength(0)
   })
 
   it('starts and explicitly stops from the right-side modifier while the Composer is focused', () => {
