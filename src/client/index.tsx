@@ -1110,10 +1110,15 @@ export function VoiceInputButton({
       armed = false
       chorded = false
     }
-    const ownsFocusedComposer = (target: EventTarget | null): target is HTMLTextAreaElement =>
-      target instanceof HTMLTextAreaElement
-      && target === document.activeElement
-      && target.closest('[data-composer-card]') === card
+    const ownsFocusedComposer = (target: EventTarget | null): target is HTMLElement => {
+      if (!(target instanceof HTMLElement)) return false
+      const isContentEditableTextbox = target.getAttribute('contenteditable') === 'true'
+        && target.getAttribute('role') === 'textbox'
+      const isAcceptedComposer = target instanceof HTMLTextAreaElement || isContentEditableTextbox
+      return isAcceptedComposer
+        && target === document.activeElement
+        && target.closest('[data-composer-card]') === card
+    }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.code !== modifierCode) {
         if (armed) chorded = true

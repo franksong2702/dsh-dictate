@@ -95,6 +95,13 @@ function voiceComposer(props: ComponentProps<typeof VoiceInputButton>): ReactNod
   </div>
 }
 
+function contentEditableVoiceComposer(props: ComponentProps<typeof VoiceInputButton>): ReactNode {
+  return <div data-composer-card>
+    <div aria-label="Composer" contentEditable role="textbox" />
+    {voiceSurfaces(props)}
+  </div>
+}
+
 describe('Contextual Dictation browser plugin', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -1381,6 +1388,60 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(FakeRecognition.instances).toHaveLength(1)
     expect(FakeRecognition.instances[0]?.startCalls).toBe(1)
+  })
+
+  it('uses right Command on the Alpha.2 contenteditable Composer', () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+    })
+    updatePrefs({ composerShortcutEnabled: true })
+    render(contentEditableVoiceComposer({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'session-1',
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+    composer.focus()
+
+    fireEvent.keyDown(composer, { key: 'Meta', code: 'MetaRight', metaKey: true, location: 2 })
+    fireEvent.keyUp(composer, { key: 'Meta', code: 'MetaRight', location: 2 })
+
+    expect(FakeRecognition.instances).toHaveLength(1)
+    expect(FakeRecognition.instances[0]?.startCalls).toBe(1)
+  })
+
+  it('rejects unfocused, outside-card, and noneditable contenteditable targets', () => {
+    updatePrefs({ composerShortcutEnabled: true })
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    render(<>
+      <div data-composer-card>
+        <div aria-label="Composer" contentEditable role="textbox" />
+        <div aria-label="Noneditable" contentEditable={false} role="textbox" />
+        <div aria-label="No textbox role" contentEditable />
+        {voiceSurfaces({ inputActions, input: { draft: '' }, sessionId: 'session-1' })}
+      </div>
+      <div aria-label="Outside card" contentEditable role="textbox" />
+    </>)
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+    const noneditable = screen.getByRole('textbox', { name: 'Noneditable' })
+    const noTextboxRole = screen.getByLabelText('No textbox role')
+    const outsideCard = screen.getByRole('textbox', { name: 'Outside card' })
+    const pressRightCommand = (target: HTMLElement): void => {
+      fireEvent.keyDown(target, { key: 'Meta', code: 'MetaRight', metaKey: true, location: 2 })
+      fireEvent.keyUp(target, { key: 'Meta', code: 'MetaRight', location: 2 })
+    }
+
+    outsideCard.focus()
+    pressRightCommand(composer)
+    noneditable.focus()
+    pressRightCommand(noneditable)
+    noTextboxRole.focus()
+    pressRightCommand(noTextboxRole)
+    outsideCard.focus()
+    pressRightCommand(outsideCard)
+
+    expect(FakeRecognition.instances).toHaveLength(0)
   })
 
   it('starts and explicitly stops from the right-side modifier while the Composer is focused', () => {
