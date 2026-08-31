@@ -3,7 +3,7 @@ import z from '@deepseek-ai/schemastery'
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { SessionStore } from '@deepseek-ai/dsh-session'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import { extractContextTermsForRequest } from './term-extraction.ts'
 import { parsePolishRequest, polishTranscript } from './polish.ts'
 import { DICTATE_SETTINGS_NAMESPACE } from './settings-contract.ts'
@@ -19,7 +19,7 @@ import {
 export const name = 'dsh-dictate'
 
 /** Settings namespace used to pair the Host plugin with its browser card. */
-const DICTATE_SETTINGS_NS = settingsNamespace(DICTATE_SETTINGS_NAMESPACE)
+const DICTATE_SETTINGS_NS = DICTATE_SETTINGS_NAMESPACE
 
 /** Host-persisted service lifecycle settings; recognition preferences remain browser-local. */
 export interface Config {
@@ -163,9 +163,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_CONFIG): void {
       }
     }
   }), 'dictate: contextual terminology and model polish RPC')
-  installSettingsSection(ctx, DICTATE_SETTINGS_NS, Config, config, {
-    setSource(source) { currentConfig = source },
-    onChange: scheduleAutoStart,
-    validate: validateConfig,
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, DICTATE_SETTINGS_NS, Config, config, {
+      setSource(source) { currentConfig = source },
+      onChange: scheduleAutoStart,
+      validate: validateConfig,
+    })
   })
 }

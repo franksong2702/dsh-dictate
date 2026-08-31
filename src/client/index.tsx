@@ -49,7 +49,7 @@ import {
 } from '../local-service-contract.ts'
 
 /*
- * DSH 0.1.2-alpha.1 renders this session-scoped slot at runtime but omits it from
+ * DSH 0.1.2-alpha.2 renders this session-scoped slot at runtime but omits it from
  * the published SlotMap declaration. Keep the bridge exact so a future host
  * declaration either merges cleanly or produces a useful contract mismatch.
  */
@@ -65,6 +65,17 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 interface InputActions {
   setDraft(text: string): void
   submit(): void
+}
+
+interface ModelCatalogModel {
+  readonly id: string
+  readonly name: string
+}
+
+interface ModelCatalogGroup {
+  readonly id: string
+  readonly name: string
+  readonly models: readonly ModelCatalogModel[]
 }
 
 interface VoiceInputProps {
@@ -205,7 +216,7 @@ export function apply(ctx: ClientContext): void {
   const loadModels = async (): Promise<readonly ModelOption[]> => {
     const response = await ctx.remote.session.modelCatalog()
     if (!response.ok) throw new Error(response.error.message)
-    return response.value.groups.flatMap(group => group.models.map(model => ({
+    return response.value.groups.flatMap((group: ModelCatalogGroup) => group.models.map((model: ModelCatalogModel) => ({
       value: encodeModelReference({ provider: group.id, model: model.id }),
       label: `${model.name} · ${group.name}`,
     })))
