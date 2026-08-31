@@ -1,13 +1,15 @@
 # DSH 0.1.2-alpha.2 npm and source compatibility candidate
 
-This change targets the official `@deepseek-ai/dsh@0.1.2-alpha.2` npm release and its immutable upstream source commit `0a53fb55bea101816fa226bb964ae2bed71c343b`, based on Dictate commit `6b86d280d796b6c87f0dbb3ba5688c36c0bcf557`. It is ready for code review, **not a release approval**.
+This `dsh-dictate@0.4.0-alpha.7` release candidate targets the official `@deepseek-ai/dsh@0.1.2-alpha.2` npm release and its immutable upstream source commit `0a53fb55bea101816fa226bb964ae2bed71c343b`, based on Dictate commit `6b86d280d796b6c87f0dbb3ba5688c36c0bcf557`. Publication still requires explicit release approval.
 
 ## Scope
 
 - Preserve Web Speech as default, optional local SenseVoice, the approved single focus card, and user-controlled sending.
 - Replace removed client-runtime loading and APIProxy model discovery with the current Cordis/Remote contracts.
 - Update custom RPC registration for the new Connection API without bypassing Host authentication.
-- Limit changes to dependency metadata, affected API calls, regression tests, and source-check tooling. Exclude Windows, UI redesign, release-workflow repair, and deployments.
+- Accept the Alpha.2 `contenteditable` Composer as the focused right-Command shortcut target without widening the shortcut beyond the owning Composer card.
+- Exclude the custom-dictionary experiment; it is not part of this release candidate.
+- Limit changes to dependency metadata, affected API calls, regression tests, source-check tooling, and release metadata. Exclude Windows, UI redesign, publishing, and production deployment.
 
 ## Verification
 
@@ -34,7 +36,7 @@ Observed on 2026-08-31 (Node v26.5.0):
 | Pinned source checker | Exit 0; all 9 stages exit 0 |
 | Frozen plugin install | Exit 0 with pnpm 9.15.9 and the regenerated lockfile |
 | Typecheck, declaration generation, client bundle and package contents | Passed |
-| Plugin regression tests (including the parent Remote injection fix) | 6 test files; 130/130 tests passed |
+| Plugin regression tests (including the parent Remote injection and contenteditable Composer shortcut fixes) | 6 test files; 132/132 tests passed |
 | Real upstream Connection | Token exchange 303; anonymous request 401; untrusted Origin/Host 403 |
 | Authenticated custom RPC | Polish/terms success, invalid input rejection, isolated settings persistence |
 | Real upstream module loader, Cordis and SlotRegistry | Built client materialized; all 3 plugin slots registered and unloaded |
@@ -74,9 +76,9 @@ On 2026-08-31, the official registry resolved `@deepseek-ai/dsh@0.1.2-alpha.2` a
 
 - [x] Resolve and lock the official `0.1.2-alpha.2` npm artifacts; pass a fresh frozen-lockfile install.
 - [x] Repeat the full isolated profile installation canary using official artifacts.
-- [ ] Obtain real Composer/microphone/local-ASR acceptance in an explicitly authorized test profile.
-- [ ] Update the release version and user documentation before publishing.
+- [x] Record the user's report that the remaining voice-input behavior passed after the authorized 3081 test deployment; this is user acceptance evidence, not an automated artifact.
+- [x] Update the release version and user documentation before publishing.
 
-`pnpm-lock.yaml` now matches the `0.1.2-alpha.2` manifest and passes a fresh frozen install. The package version and user-facing README still describe the prior plugin release, so do not publish this compatibility candidate as-is.
+`pnpm-lock.yaml` matches the `0.1.2-alpha.2` manifest and passes a fresh frozen install. The package version and user-facing README now identify the `0.4.0-alpha.7` candidate. No npm publish, Git tag, GitHub Release, merge, or production deployment is authorized by this preparation step.
 
-This candidate raises the minimum DSH peer version to `0.1.2-alpha.2`; it does not claim continued compatibility with `0.1.1-rc.2` or `0.1.2-alpha.1`. Windows, real browser layout, microphone capture, actual model polishing and native ASR audio transcription are unverified in this run.
+This candidate raises the minimum DSH peer version to `0.1.2-alpha.2`; it does not claim continued compatibility with `0.1.1-rc.2` or `0.1.2-alpha.1`. Windows, real browser layout, microphone capture, actual model polishing and native ASR audio transcription were not independently verified by this automated release-preparation run.

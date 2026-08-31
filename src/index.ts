@@ -48,7 +48,7 @@ function validateConfig(config: Config): void {
 /** Host services used by the browser-safe Contextual Dictation RPC. */
 export const inject = ['connection', 'llm', 'sessions', 'settings']
 
-/** Register trusted-host terminology and transcript-polishing endpoints. */
+/** Register browser-authenticated terminology and transcript-polishing endpoints. */
 export function apply(ctx: Context, config: Config = DEFAULT_CONFIG): void {
   const host = ctx as Context & {
     readonly connection: HostConnectionHandle
