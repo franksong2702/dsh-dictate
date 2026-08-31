@@ -154,7 +154,8 @@ jobs:
             fi
             echo "npm already contains the identical $PACKAGE@$VERSION artifact; resuming after publish."
           elif [[ "$npm_output" == *E404* || "$npm_output" == *'404 Not Found'* || "$npm_output" == *'No match found'* ]]; then
-            npm publish --tag next --provenance
+            # Publish the exact artifact verified above; a bare npm publish repacks the tree and changes the digest.
+            npm publish "artifacts/${PACKAGE}-${VERSION}.tgz" --tag next --provenance
           else
             printf '%s\n' "$npm_output" >&2
             exit 1
@@ -168,7 +169,8 @@ jobs:
           set -euo pipefail
           readonly PACKAGE='dsh-dictate'
           local_shasum="$(shasum "artifacts/${PACKAGE}-${VERSION}.tgz" | awk '{print $1}')"
-          for attempt in 1 2 3 4 5 6; do
+          # npm metadata propagation can exceed one minute after a successful Trusted Publish.
+          for attempt in {1..30}; do
             version_json="$(npm view "$PACKAGE@$VERSION" version --json 2>/dev/null || true)"
             next_json="$(npm view "$PACKAGE" dist-tags.next --json 2>/dev/null || true)"
             remote_shasum_json="$(npm view "$PACKAGE@$VERSION" dist.shasum --json 2>/dev/null || true)"
@@ -183,11 +185,11 @@ jobs:
               echo "npm published $PACKAGE@$VERSION with next=$VERSION and shasum=$local_shasum."
               exit 0
             fi
-            if (( attempt < 6 )); then
+            if (( attempt < 30 )); then
               sleep 10
             fi
           done
-          echo "npm did not expose the expected version, next tag, and artifact digest after six attempts." >&2
+          echo "npm did not expose the expected version, next tag, and artifact digest after 30 attempts." >&2
           exit 1
 
       - name: Create GitHub prerelease
