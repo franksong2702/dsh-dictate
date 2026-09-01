@@ -20,6 +20,7 @@ jobs:
     outputs:
       latest: ${{ steps.dist-tags.outputs.latest }}
       next: ${{ steps.dist-tags.outputs.next }}
+      alpha: ${{ steps.dist-tags.outputs.alpha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,6 +53,8 @@ jobs:
             dedupe_args: ""
           - channel: next
             dedupe_args: --dedupe-against latest
+          - channel: alpha
+            dedupe_args: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,12 +71,12 @@ jobs:
       - name: Check DSH upstream candidate
         id: first-canary
         continue-on-error: true
-        run: pnpm --silent run check:dsh-next -- --channel "${{ matrix.channel }}" ${{ matrix.dedupe_args }} --resolved-latest "${{ needs.resolve.outputs.latest }}" --resolved-next "${{ needs.resolve.outputs.next }}" --report .canary/first.json
+        run: pnpm --silent run check:dsh-next -- --channel "${{ matrix.channel }}" ${{ matrix.dedupe_args }} --resolved-latest "${{ needs.resolve.outputs.latest }}" --resolved-next "${{ needs.resolve.outputs.next }}" --resolved-alpha "${{ needs.resolve.outputs.alpha }}" --report .canary/first.json
       - name: Confirm a candidate failure
         id: second-canary
         if: steps.first-canary.outcome == 'failure'
         continue-on-error: true
-        run: pnpm --silent run check:dsh-next -- --channel "${{ matrix.channel }}" ${{ matrix.dedupe_args }} --resolved-latest "${{ needs.resolve.outputs.latest }}" --resolved-next "${{ needs.resolve.outputs.next }}" --report .canary/second.json
+        run: pnpm --silent run check:dsh-next -- --channel "${{ matrix.channel }}" ${{ matrix.dedupe_args }} --resolved-latest "${{ needs.resolve.outputs.latest }}" --resolved-next "${{ needs.resolve.outputs.next }}" --resolved-alpha "${{ needs.resolve.outputs.alpha }}" --report .canary/second.json
       - name: Record a confirmed compatibility alert
         if: steps.first-canary.outcome == 'failure' && steps.second-canary.outcome == 'failure'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0

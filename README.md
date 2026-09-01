@@ -6,7 +6,7 @@
 
 它不是实时语音对话插件：不会朗读模型回复，也不会启动双向语音会话。它把听写变成 Composer 的一种原生输入方式，让用户保留审阅、修改和发送文字的主动权。
 
-## 快速安装（DSH 0.1.2-alpha.2）
+## 快速安装（DSH 0.1.2-alpha.3）
 
 从 GitHub Releases 下载目标版本的 `dsh-dictate-<version>.tgz`，安装到 Web profile，然后重启对应的 `dsh web` 进程：
 
@@ -14,10 +14,11 @@
 dsh plugin --profile web add ./dsh-dictate-<version>.tgz
 ```
 
-安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。“浏览器语音识别”保持默认、无需安装；已发布的 `v0.4.0-alpha.5` 在 Apple Silicon Mac 上提供本地识别。Windows x64 支持仍在 Draft PR 中，尚未进入 release。
+安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。“浏览器语音识别”保持默认、无需安装；已发布的 `v0.4.0-alpha.7` 在 Apple Silicon Mac 上提供本地识别。Windows x64 支持仍在 Draft PR 中，尚未进入 release。
 
-## Unreleased（不进入当前 release）
+## 下一版本目标（Draft）
 
+- 兼容基线与锁定依赖更新为官方 DSH `0.1.2-alpha.3`；上游 canary 同时监测 npm 的 `latest`、`next` 和 `alpha` 渠道。
 - Windows x64 可以像 Apple Silicon 一样从插件设置页完成原生运行程序校验、SenseVoice Q8 模型下载、启动和状态检查。
 - Windows 原生运行程序不签名，也不安装系统服务或托盘程序；启动时会打开名为 `DSH Dictate Local ASR` 的可见命令行窗口，关闭窗口即停止本地识别。
 - 插件不要求管理员权限，也不修改系统 Python、PATH 或全局软件包。Windows 可能根据本机安全策略提示用户确认运行未签名程序。
@@ -121,7 +122,7 @@ SenseVoiceSmall 模型及原生推理依赖的来源、作者和许可证信息�
 
 ## 兼容性与 Alpha 限制
 
-- 当前面向 DSH `0.1.2-alpha.2`。
+- 当前 Draft 面向 DSH `0.1.2-alpha.3`。
 - Web Speech 默认模式需要 Chrome 或 Edge 的 Web Speech API。本地端点模式需要浏览器的麦克风与 Web Audio 能力；两种模式首次使用时都需要授予麦克风权限。
 - 本地语音识别是停止录音后的最终转写，目前提供 VAD 语音确认和约 600 ms 尾音保护，但不提供实时临时文字；本地服务由插件手动或随 DSH 自动管理。
 - 中英混合识别优化依赖浏览器及当前语音识别服务对 Web Speech contextual phrases 的支持；不支持时仍保留现有识别与模型润色流程。

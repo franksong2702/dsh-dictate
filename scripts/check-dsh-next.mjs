@@ -16,7 +16,7 @@ const INSTALL_CHECK = resolve(REPO_ROOT, 'scripts/check-dsh-install.mjs')
 const MAX_SUMMARY_LENGTH = 1600
 const REGISTRY_TIMEOUT_MS = 60 * 1000
 const CANDIDATE_CHECK_TIMEOUT_MS = 25 * 60 * 1000
-const CHANNELS = new Set(['latest', 'next'])
+const CHANNELS = new Set(['latest', 'next', 'alpha'])
 
 function commandName(name) {
   return process.platform === 'win32' && name === 'npm' ? `${name}.cmd` : name
@@ -66,12 +66,13 @@ export function parseRegistryDistTags(output) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('npm returned invalid DSH dist-tags JSON')
   }
-  if (typeof value.latest !== 'string' || typeof value.next !== 'string') {
+  if (typeof value.latest !== 'string' || typeof value.next !== 'string' || typeof value.alpha !== 'string') {
     throw new Error('npm returned incomplete DSH dist-tags JSON')
   }
   return {
     latest: parseRegistryVersion(value.latest),
     next: parseRegistryVersion(value.next),
+    alpha: parseRegistryVersion(value.alpha),
   }
 }
 
@@ -118,11 +119,12 @@ export function parseCanaryArgs(args) {
   let outputPath
   let resolvedLatest
   let resolvedNext
+  let resolvedAlpha
   for (let index = 0; index < values.length; index += 2) {
     const name = values[index]
     const value = values[index + 1]
     if (value === undefined || value === '') {
-      throw new Error('usage: check-dsh-next [--channel <latest|next>] [--dedupe-against <latest|next>] [--report <json-file>]')
+      throw new Error('usage: check-dsh-next [--channel <latest|next|alpha>] [--dedupe-against <latest|next|alpha>] [--report <json-file>]')
     }
     if (name === '--channel' && CHANNELS.has(value)) {
       channel = value
@@ -144,13 +146,18 @@ export function parseCanaryArgs(args) {
       resolvedNext = parseRegistryVersion(value)
       continue
     }
-    throw new Error('usage: check-dsh-next [--channel <latest|next>] [--dedupe-against <latest|next>] [--resolved-latest <version> --resolved-next <version>] [--report <json-file>]')
+    if (name === '--resolved-alpha') {
+      resolvedAlpha = parseRegistryVersion(value)
+      continue
+    }
+    throw new Error('usage: check-dsh-next [--channel <latest|next|alpha>] [--dedupe-against <latest|next|alpha>] [--resolved-latest <version> --resolved-next <version> --resolved-alpha <version>] [--report <json-file>]')
   }
   if (dedupeAgainst === channel) throw new Error('the canary channel cannot deduplicate against itself')
-  if ((resolvedLatest === undefined) !== (resolvedNext === undefined)) {
-    throw new Error('resolved latest and next versions must be supplied together')
+  const resolvedCount = [resolvedLatest, resolvedNext, resolvedAlpha].filter(value => value !== undefined).length
+  if (resolvedCount !== 0 && resolvedCount !== 3) {
+    throw new Error('resolved latest, next, and alpha versions must be supplied together')
   }
-  const resolvedDistTags = resolvedLatest === undefined ? undefined : { latest: resolvedLatest, next: resolvedNext }
+  const resolvedDistTags = resolvedCount === 0 ? undefined : { latest: resolvedLatest, next: resolvedNext, alpha: resolvedAlpha }
   return { channel, dedupeAgainst, outputPath, resolvedDistTags }
 }
 
@@ -195,7 +202,7 @@ export async function runCanary(options, dependencies = {}) {
     if (resolved.distTags === undefined) throw new Error(resolved.error)
     await appendFile(
       options.distTagsOutputPath,
-      `latest=${resolved.distTags.latest}\nnext=${resolved.distTags.next}\n`,
+      `latest=${resolved.distTags.latest}\nnext=${resolved.distTags.next}\nalpha=${resolved.distTags.alpha}\n`,
       'utf8',
     )
     process.stdout.write(`${JSON.stringify(resolved.distTags)}\n`)

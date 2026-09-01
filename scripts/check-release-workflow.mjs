@@ -70,7 +70,7 @@ assertContract('post-publish verification checks version, next tag, and artifact
 assertContract('GitHub prerelease is created from the workflow SHA with the tarball',
   /gh release create[\s\S]*?artifacts\/dsh-dictate-\$\{VERSION\}\.tgz[\s\S]*?--prerelease[\s\S]*?--target "\$GITHUB_SHA"/.test(workflow))
 assertContract('release notes state DSH and platform compatibility',
-  /Requires DeepSeek Harness >=0\.1\.2-alpha\.2 <0\.2\.0/.test(workflow)
+  /Requires DeepSeek Harness >=0\.1\.2-alpha\.3 <0\.2\.0/.test(workflow)
     && /Experimental local ASR supports Apple Silicon Macs and unsigned Windows x64/.test(workflow))
 assertContract('release verifies the bundled Windows x64 runtime',
   /file native\/win32-x64\/dsh-dictate-asr\.exe/.test(workflow)

@@ -34,9 +34,9 @@ function assertContract(name, condition) {
 
 assertContract('JSON registry versions are accepted', parseRegistryVersion('"0.1.2-rc.1"\n') === '0.1.2-rc.1')
 assertContract('plain registry versions are accepted', parseRegistryVersion('0.1.2') === '0.1.2')
-assertContract('latest and next registry tags are accepted', (() => {
-  const tags = parseRegistryDistTags('{"latest":"0.1.2","next":"0.1.3-rc.1"}')
-  return tags.latest === '0.1.2' && tags.next === '0.1.3-rc.1'
+assertContract('latest, next, and alpha registry tags are accepted', (() => {
+  const tags = parseRegistryDistTags('{"latest":"0.1.2","next":"0.1.3-rc.1","alpha":"0.1.4-alpha.1"}')
+  return tags.latest === '0.1.2' && tags.next === '0.1.3-rc.1' && tags.alpha === '0.1.4-alpha.1'
 })())
 assertContract('incomplete registry tags are rejected', (() => {
   try {
@@ -61,12 +61,14 @@ assertContract('channel, deduplication, and report arguments are parsed', (() =>
     '--dedupe-against', 'latest',
     '--resolved-latest', '0.1.2',
     '--resolved-next', '0.1.3-rc.1',
+    '--resolved-alpha', '0.1.4-alpha.1',
     '--report', '.canary/report.json',
   ])
   return args.channel === 'next'
     && args.dedupeAgainst === 'latest'
     && args.resolvedDistTags.latest === '0.1.2'
     && args.resolvedDistTags.next === '0.1.3-rc.1'
+    && args.resolvedDistTags.alpha === '0.1.4-alpha.1'
     && args.outputPath === resolve('.canary/report.json')
 })())
 assertContract('dist-tag output mode is parsed separately', (() => {
@@ -89,8 +91,8 @@ assertContract('a channel cannot deduplicate against itself', (() => {
     return true
   }
 })())
-assertContract('next deduplicates an identical latest candidate', duplicateCandidate('next', 'latest', { latest: '0.1.2', next: '0.1.2' }))
-assertContract('different channel versions remain independent candidates', !duplicateCandidate('next', 'latest', { latest: '0.1.2', next: '0.1.3-rc.1' }))
+assertContract('next deduplicates an identical latest candidate', duplicateCandidate('next', 'latest', { latest: '0.1.2', next: '0.1.2', alpha: '0.1.3-alpha.1' }))
+assertContract('different channel versions remain independent candidates', !duplicateCandidate('next', 'latest', { latest: '0.1.2', next: '0.1.3-rc.1', alpha: '0.1.3-alpha.1' }))
 
 const scrubbedEnvironment = scrubCanaryEnvironment({
   PATH: '/bin',
@@ -149,6 +151,7 @@ async function runCandidateFixture(exitCode) {
       '--channel', 'next',
       '--resolved-latest', '0.1.1',
       '--resolved-next', '9.9.9-next.1',
+      '--resolved-alpha', '9.9.9-alpha.1',
       '--report', reportPath,
     ]), { candidateCheckPath: candidateCheck })
     return { status, report: JSON.parse(await readFile(reportPath, 'utf8')) }
