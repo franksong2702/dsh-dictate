@@ -49,7 +49,7 @@ import {
 } from '../local-service-contract.ts'
 
 /*
- * DSH 0.1.2-alpha.2 renders this session-scoped slot at runtime but omits it from
+ * DSH 0.1.2-alpha.3 renders this session-scoped slot at runtime but omits it from
  * the published SlotMap declaration. Keep the bridge exact so a future host
  * declaration either merges cleanly or produces a useful contract mismatch.
  */

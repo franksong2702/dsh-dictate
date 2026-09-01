@@ -284,7 +284,7 @@ export function SettingsPanel({
               },
               {
                 value: 'local-endpoint' as const,
-                title: '本地语音识别（Apple Silicon，实验性）',
+                title: '本地语音识别（实验性）',
                 description: '录音和识别都在本机完成。首次使用需下载约 253 MB 识别模型，准备完成后可离线转写。',
               },
             ]).map(option => {
@@ -394,7 +394,9 @@ export function SettingsPanel({
                       <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
                         {installStatus?.available === false
                           ? `当前版本暂不支持 ${installStatus.platform} 本地语音识别；请继续使用浏览器语音识别。`
-                          : '识别模型：SenseVoice Q8。插件会自动完成安装和校验，不修改系统 Python 或 PATH。'}
+                          : installStatus?.platform === 'win32-x64'
+                            ? '识别模型：SenseVoice Q8。启动后会打开本地服务窗口；关闭窗口会停止语音识别。'
+                            : '识别模型：SenseVoice Q8。插件会自动完成安装和校验，不修改系统 Python 或 PATH。'}
                       </p>
                     </div>
                   ) : null}

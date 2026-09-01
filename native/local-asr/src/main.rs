@@ -36,7 +36,14 @@ struct Health<'a> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    configure_console()?;
+    if std::env::args().any(|arg| arg == "--version") {
+        println!("dsh-dictate-asr {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let args = Args::parse()?;
+    eprintln!("DSH Dictate Local ASR");
+    eprintln!("Local-only service. Closing this window stops voice transcription.");
     eprintln!(
         "Loading SenseVoice model from {}",
         args.model_path.display()
@@ -71,6 +78,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!("Native SenseVoice runtime listening on http://{address}");
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn configure_console() -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Console::{
+        SetConsoleCtrlHandler, SetConsoleTitleW, CTRL_CLOSE_EVENT,
+    };
+    use windows_sys::Win32::System::Threading::ExitProcess;
+
+    unsafe extern "system" fn handle_console_control(control_type: u32) -> i32 {
+        if control_type == CTRL_CLOSE_EVENT {
+            // A zero exit code is the contract used by the host to distinguish a
+            // user closing the visible console from an unexpected runtime exit.
+            unsafe { ExitProcess(0) };
+        }
+        0
+    }
+
+    let title: Vec<u16> = std::ffi::OsStr::new("DSH Dictate Local ASR")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `title` is a valid, null-terminated UTF-16 buffer for the duration
+    // of the call. The control handler is a process-lifetime function pointer.
+    unsafe {
+        SetConsoleTitleW(title.as_ptr());
+        if SetConsoleCtrlHandler(Some(handle_console_control), 1) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn configure_console() -> std::io::Result<()> {
     Ok(())
 }
 

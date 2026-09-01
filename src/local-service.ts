@@ -47,8 +47,8 @@ const OUTPUT_LIMIT = 2_000
 
 export interface LocalServiceProcess {
   readonly pid?: number
-  readonly stdout: { on(event: 'data', listener: (chunk: unknown) => void): unknown }
-  readonly stderr: { on(event: 'data', listener: (chunk: unknown) => void): unknown }
+  readonly stdout: null | { on(event: 'data', listener: (chunk: unknown) => void): unknown }
+  readonly stderr: null | { on(event: 'data', listener: (chunk: unknown) => void): unknown }
   on(event: 'error', listener: (error: Error) => void): unknown
   on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
   kill(signal?: NodeJS.Signals): boolean
@@ -57,9 +57,13 @@ export interface LocalServiceProcess {
 export interface LocalServiceRuntime {
   readonly env: NodeJS.ProcessEnv
   readonly cwd: string
+  readonly platform: NodeJS.Platform
   spawn(file: string, args: readonly string[], options: {
     readonly cwd: string
     readonly env: NodeJS.ProcessEnv
+    readonly detached?: boolean
+    readonly stdio?: 'inherit' | ['ignore', 'pipe', 'pipe']
+    readonly windowsHide?: boolean
   }): LocalServiceProcess
   fetch(input: string, init: RequestInit): Promise<Response>
   delay(milliseconds: number): Promise<void>
@@ -77,10 +81,11 @@ function processRuntime(): LocalServiceRuntime {
   return {
     env: process.env,
     cwd: process.cwd(),
+    platform: process.platform,
     spawn: (file, args, options) => spawn(file, args, {
       ...options,
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
     }) as unknown as LocalServiceProcess,
     fetch: (input, init) => fetch(input, init),
     delay: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
@@ -227,7 +232,7 @@ export class LocalServiceController {
       this.message = '本地服务进程存在，但健康检查失败'
       return this.snapshot()
     }
-    if (this.phase !== 'error') {
+    if (this.phase !== 'error' && this.phase !== 'stopped') {
       this.phase = 'stopped'
       this.stage = 'idle'
       this.message = '本地服务未启动'
@@ -298,9 +303,13 @@ export class LocalServiceController {
       ...(this.modelPath === undefined ? ['--model', 'sensevoice'] : ['--model-path', this.modelPath]),
       '--cors-origin', origin,
     ]
+    const showWindowsConsole = this.runtime.platform === 'win32'
     const child = this.runtime.spawn(this.executable, args, {
       cwd: this.workingDirectory,
       env: this.runtime.env,
+      ...(showWindowsConsole
+        ? { detached: true, stdio: 'inherit' as const, windowsHide: false }
+        : { stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'] }),
     })
     this.process = child
     this.activeOrigin = origin
@@ -310,11 +319,11 @@ export class LocalServiceController {
       child.kill('SIGTERM')
     }
     signal?.addEventListener('abort', abortHandler, { once: true })
-    child.stdout.on('data', chunk => {
+    child.stdout?.on('data', chunk => {
       this.output = appendOutput(this.output, chunk)
       this.updateStartupStatus()
     })
-    child.stderr.on('data', chunk => {
+    child.stderr?.on('data', chunk => {
       this.output = appendOutput(this.output, chunk)
       this.updateStartupStatus()
     })
@@ -339,10 +348,18 @@ export class LocalServiceController {
           this.startedAt = undefined
         }
       } else {
-        this.phase = 'error'
-        this.stage = 'failed'
-        const detail = this.output.trim().split('\n').at(-1)?.slice(0, 240)
-        this.message = `本地服务意外退出（${signal ?? code ?? 'unknown'}）${detail === undefined ? '' : `：${detail}`}`
+        if (this.runtime.platform === 'win32' && code === 0 && signal === null) {
+          this.phase = 'stopped'
+          this.stage = 'idle'
+          this.message = '本地服务未启动'
+          this.progressPercent = null
+          this.startedAt = undefined
+        } else {
+          this.phase = 'error'
+          this.stage = 'failed'
+          const detail = this.output.trim().split('\n').at(-1)?.slice(0, 240)
+          this.message = `本地服务意外退出（${signal ?? code ?? 'unknown'}）${detail ? `：${detail}` : ''}`
+        }
       }
     })
 

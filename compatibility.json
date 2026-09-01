@@ -4,7 +4,7 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "dshPluginApi": {
-    "version": "0.1.2-alpha.2",
+    "version": "0.1.2-alpha.3",
     "packages": [
       "@deepseek-ai/dsh-client-connection",
       "@deepseek-ai/dsh-api-remotes",
@@ -20,7 +20,7 @@
   },
   "sourceCandidate": {
     "repository": "https://github.com/deepseek-ai/deepseek-harness",
-    "commit": "0a53fb55bea101816fa226bb964ae2bed71c343b",
+    "commit": "dd6322d604e00eec1ba5e0c8541159906a21094a",
     "npmArtifactsVerified": true
   }
 }

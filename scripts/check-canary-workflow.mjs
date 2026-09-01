@@ -22,7 +22,7 @@ assertContract('scheduled trigger exists', workflow.includes('cron: "0 3 * * *"'
 assertContract('manual trigger exists', workflow.includes('workflow_dispatch:'))
 assertContract('workflow has read-only contents permission', workflow.includes('contents: read'))
 assertContract('issue write is scoped to canary job', workflow.includes('issues: write'))
-assertContract('latest and next are both checked', workflow.includes('channel: latest') && workflow.includes('channel: next'))
+assertContract('latest, next, and alpha are all checked', workflow.includes('channel: latest') && workflow.includes('channel: next') && workflow.includes('channel: alpha'))
 assertContract('next deduplicates against latest', workflow.includes('dedupe_args: --dedupe-against latest'))
 assertContract('canary keeps the provisioned pnpm major active', workflow.includes('npm_config_manage_package_manager_versions: "false"'))
 assertContract('canary provisions exactly one pinned pnpm version',
@@ -35,7 +35,7 @@ assertContract('workflow never publishes or deploys', !/npm\s+publish|gh\s+relea
 assertContract('all third-party actions are pinned', [...workflow.matchAll(/uses:\s+[^\s@]+@([^\s#]+)/gu)].every(match => /^[0-9a-f]{40}$/u.test(match[1] ?? '')))
 assertContract('documentation excludes local ASR from upstream canary', documentation.includes('does not start a model provider') && documentation.includes('optional local ASR runtime/model'))
 assertContract('documentation defines infrastructure exit code', documentation.includes('`2` for candidate resolution or checker infrastructure failures'))
-assertContract('compatibility baseline is explicit', compatibility.schemaVersion === 1 && compatibility.dshPluginApi?.version === '0.1.2-alpha.2')
+assertContract('compatibility baseline is explicit', compatibility.schemaVersion === 1 && compatibility.dshPluginApi?.version === '0.1.2-alpha.3')
 assertContract('canary scripts are package scripts', packageManifest.scripts?.['check:dsh-next'] === 'node scripts/check-dsh-next.mjs' && packageManifest.scripts?.['check:dsh-install'] === 'node scripts/check-dsh-install.mjs')
 assertContract('install check prepares the official profile module fallback before importing the plugin', (() => {
   const profileProbe = /dshBinary,\s*\[\s*'--profile',\s*'web',\s*'--help',?\s*\]/u.exec(installChecker)?.index ?? -1

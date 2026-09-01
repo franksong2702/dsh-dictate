@@ -109,6 +109,7 @@ dependencies = [
  "tokio",
  "tower-http",
  "transcribe-cpp",
+ "windows-sys",
 ]
 
 [[package]]

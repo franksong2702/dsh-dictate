@@ -10,15 +10,36 @@ const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 const work = await mkdtemp(join(tmpdir(), 'dsh-dictate-package-'))
 const packedNodeModules = join(work, 'unpack', 'package', 'node_modules')
 const requiredKeywords = ['deepseek-harness', 'voice-input', 'speech-to-text', 'sensevoice']
-const nativeRuntime = 'native/darwin-arm64/dsh-dictate-asr'
-const nativeRuntimeSha256 = 'dab83ea0c5bfa95b8e9c94f804da7d88c9fc5657ac5ac8503554ec338d5db52f'
+const nativeRuntimes = [
+  {
+    platform: 'darwin-arm64',
+    path: 'native/darwin-arm64/dsh-dictate-asr',
+    sha256: 'dab83ea0c5bfa95b8e9c94f804da7d88c9fc5657ac5ac8503554ec338d5db52f',
+  },
+  {
+    platform: 'win32-x64',
+    path: 'native/win32-x64/dsh-dictate-asr.exe',
+    sha256: '92b727dbcd7f2edcb7b96bd6e012147480b9ef408c10ed343347e9722b09f5f2',
+  },
+]
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, { cwd, encoding: 'utf8' })
+  if (result.error !== undefined) {
+    throw new Error(`${command} ${args.join(' ')} could not start: ${result.error.message}`)
+  }
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed:\n${result.stderr || result.stdout}`)
   }
   return result.stdout.trim()
+}
+
+function runPnpm(args, cwd = root) {
+  const pnpmEntry = process.env.npm_execpath
+  if (pnpmEntry === undefined || pnpmEntry.length === 0) {
+    throw new Error('package verification must be invoked through pnpm')
+  }
+  return run(process.execPath, [pnpmEntry, ...args], cwd)
 }
 
 try {
@@ -33,11 +54,11 @@ try {
     }
   }
 
-  run('pnpm', ['--config.ignore-scripts=true', 'pack', '--pack-destination', work])
+  runPnpm(['--config.ignore-scripts=true', 'pack', '--pack-destination', work])
   const tarball = join(work, `${manifest.name}-${manifest.version}.tgz`)
   await access(tarball)
 
-  const entries = run('tar', ['-tzf', tarball]).split('\n').filter(Boolean)
+  const entries = run('tar', ['-tzf', tarball]).split(/\r?\n/).filter(Boolean)
   const required = [
     'package/package.json',
     'package/cordis.patch.yml',
@@ -45,7 +66,7 @@ try {
     'package/lib/client.js',
     'package/lib/types/index.d.ts',
     'package/THIRD_PARTY_NOTICES.md',
-    `package/${nativeRuntime}`,
+    ...nativeRuntimes.map(runtime => `package/${runtime.path}`),
     'package/docs/images/voice-input-hero.jpg',
     'package/docs/images/composer-voice-entry.jpg',
     'package/docs/images/voice-input-settings.jpg',
@@ -60,12 +81,16 @@ try {
   await mkdir(unpack)
   run('tar', ['-xzf', tarball, '-C', unpack])
   const packedRoot = join(unpack, 'package')
-  const packedRuntime = join(packedRoot, nativeRuntime)
-  const runtimeInfo = await stat(packedRuntime)
-  if (!runtimeInfo.isFile()) throw new Error('packed native ASR runtime must be a file')
-  const runtimeDigest = createHash('sha256').update(await readFile(packedRuntime)).digest('hex')
-  if (runtimeDigest !== nativeRuntimeSha256) {
-    throw new Error(`packed native ASR runtime SHA-256 mismatch: ${runtimeDigest}`)
+  const verifiedNativeRuntimes = []
+  for (const nativeRuntime of nativeRuntimes) {
+    const packedRuntime = join(packedRoot, nativeRuntime.path)
+    const runtimeInfo = await stat(packedRuntime)
+    if (!runtimeInfo.isFile()) throw new Error(`packed native ASR runtime must be a file: ${nativeRuntime.path}`)
+    const runtimeDigest = createHash('sha256').update(await readFile(packedRuntime)).digest('hex')
+    if (runtimeDigest !== nativeRuntime.sha256) {
+      throw new Error(`packed native ASR runtime SHA-256 mismatch for ${nativeRuntime.platform}: ${runtimeDigest}`)
+    }
+    verifiedNativeRuntimes.push({ platform: nativeRuntime.platform, sha256: runtimeDigest })
   }
   await symlink(join(root, 'node_modules'), packedNodeModules, process.platform === 'win32' ? 'junction' : 'dir')
   const plugin = await import(`${pathToFileURL(join(packedRoot, 'lib/index.js')).href}?verify=${Date.now()}`)
@@ -85,7 +110,7 @@ try {
     entryCount: entries.length,
     hostExports: exports,
     clientWrapper: true,
-    nativeRuntime: { platform: 'darwin-arm64', sha256: runtimeDigest },
+    nativeRuntimes: verifiedNativeRuntimes,
     discoveryKeywords: requiredKeywords,
   }))
 } finally {

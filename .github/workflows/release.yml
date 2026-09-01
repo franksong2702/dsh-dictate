@@ -121,6 +121,9 @@ jobs:
           file native/darwin-arm64/dsh-dictate-asr | grep -q 'Mach-O 64-bit executable arm64'
           test -x native/darwin-arm64/dsh-dictate-asr
           codesign --verify --strict native/darwin-arm64/dsh-dictate-asr
+          file native/win32-x64/dsh-dictate-asr.exe | grep -q 'PE32+ executable (console) x86-64'
+          test "$(stat -f '%z' native/win32-x64/dsh-dictate-asr.exe)" = '5067264'
+          test "$(shasum -a 256 native/win32-x64/dsh-dictate-asr.exe | awk '{print $1}')" = '92b727dbcd7f2edcb7b96bd6e012147480b9ef408c10ed343347e9722b09f5f2'
 
       - name: Pack the release artifact
         shell: bash
@@ -204,4 +207,4 @@ jobs:
             --prerelease \
             --target "$GITHUB_SHA" \
             --generate-notes \
-            --notes 'Requires DeepSeek Harness >=0.1.2-alpha.2 <0.2.0. Local ASR currently supports Apple Silicon Macs.'
+            --notes 'Requires DeepSeek Harness >=0.1.2-alpha.3 <0.2.0. Experimental local ASR supports Apple Silicon Macs and unsigned Windows x64.'

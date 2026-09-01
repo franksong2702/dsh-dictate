@@ -2,7 +2,7 @@
 
 ## transcribe.cpp
 
-The bundled macOS Apple Silicon local-ASR runtime uses
+The bundled macOS Apple Silicon and Windows x64 local-ASR runtimes use
 [`transcribe.cpp`](https://github.com/handy-computer/transcribe.cpp), licensed
 under the MIT License. The runtime source and pinned Rust dependency lockfile are
 included in this repository under `native/local-asr/`.

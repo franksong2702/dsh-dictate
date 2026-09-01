@@ -47,6 +47,7 @@ function runtime(overrides: Partial<LocalServiceRuntime> = {}): LocalServiceRunt
       DSH_DICTATE_FUNASR_WORKDIR: '/test/work',
     },
     cwd: '/fallback',
+    platform: 'darwin',
     spawn: vi.fn(() => new FakeProcess()),
     fetch: vi.fn(async () => new Response('', { status: 503 })),
     delay: vi.fn(async () => {}),
@@ -167,6 +168,7 @@ describe('local SenseVoice service controller', () => {
     ], {
       cwd: '/test/work',
       env: testRuntime.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
 
     await expect(controller.status()).resolves.toMatchObject({ phase: 'running', managed: true })
@@ -199,6 +201,70 @@ describe('local SenseVoice service controller', () => {
       '--cors-origin', 'http://127.0.0.1:3081',
     ], expect.objectContaining({ cwd: '/test/install-root' }))
     await controller.stop()
+  })
+
+  it('starts the Windows runtime in a visible, separately managed console', async () => {
+    const child = new FakeProcess()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+    const testRuntime = runtime({
+      platform: 'win32',
+      fetch: fetchMock,
+      spawn: vi.fn(() => child),
+    })
+    const controller = new LocalServiceController(testRuntime, {
+      executable: 'C:\\test\\dsh-dictate-asr.exe',
+      workingDirectory: 'C:\\test',
+      modelPath: 'C:\\test\\models\\SenseVoiceSmall-Q8_0.gguf',
+    })
+
+    await controller.start('http://127.0.0.1:3081')
+
+    expect(testRuntime.spawn).toHaveBeenCalledWith('C:\\test\\dsh-dictate-asr.exe', expect.arrayContaining([
+      '--model-path', 'C:\\test\\models\\SenseVoiceSmall-Q8_0.gguf',
+    ]), {
+      cwd: 'C:\\test',
+      env: testRuntime.env,
+      detached: true,
+      stdio: 'inherit',
+      windowsHide: false,
+    })
+
+    child.emit('exit', 0, null)
+    fetchMock.mockResolvedValue(new Response('', { status: 503 }))
+    await expect(controller.status()).resolves.toMatchObject({
+      phase: 'stopped',
+      managed: false,
+      message: '本地服务未启动',
+    })
+  })
+
+  it('reports an unexpected Windows runtime exit as an error', async () => {
+    const child = new FakeProcess()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValue(new Response('', { status: 503 }))
+    const testRuntime = runtime({
+      platform: 'win32',
+      fetch: fetchMock,
+      spawn: vi.fn(() => child),
+    })
+    const controller = new LocalServiceController(testRuntime, {
+      executable: 'C:\\test\\dsh-dictate-asr.exe',
+      workingDirectory: 'C:\\test',
+      modelPath: 'C:\\test\\models\\SenseVoiceSmall-Q8_0.gguf',
+    })
+
+    await controller.start('http://127.0.0.1:3081')
+    child.emit('exit', 1, null)
+
+    await expect(controller.status()).resolves.toMatchObject({
+      phase: 'error',
+      stage: 'failed',
+      managed: false,
+      message: '本地服务意外退出（1）',
+    })
   })
 
   it('serializes concurrent starts before the first health check completes', async () => {
@@ -255,7 +321,7 @@ describe('local SenseVoice service controller', () => {
       message: '正在检查 SenseVoice 模型文件',
     })
 
-    child.emit('data', '\u001b[1Amodel.pt: 42%|████▏     | 393M/936M')
+    child.emit('data', '^[[1Amodel.pt: 42%|████▏     | 393M/936M')
     await expect(controller.status()).resolves.toMatchObject({
       phase: 'starting',
       stage: 'downloading-model',

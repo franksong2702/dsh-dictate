@@ -24,7 +24,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Check Rust formatting
@@ -36,3 +36,68 @@ jobs:
           file native/darwin-arm64/dsh-dictate-asr | grep -q 'Mach-O 64-bit executable arm64'
           test -x native/darwin-arm64/dsh-dictate-asr
           codesign --verify --strict native/darwin-arm64/dsh-dictate-asr
+
+  windows-x64:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+      TRANSCRIBE_CMAKE_ARGS: -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify bundled unsigned Windows x64 runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = 'native/win32-x64/dsh-dictate-asr.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($runtime)
+          if ($bytes.Length -ne 5067264 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+            throw 'Bundled Windows runtime is missing, has the wrong size, or is not a PE executable.'
+          }
+          $digest = (Get-FileHash $runtime -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne '92b727dbcd7f2edcb7b96bd6e012147480b9ef408c10ed343347e9722b09f5f2') {
+            throw "Bundled Windows runtime SHA-256 mismatch: $digest"
+          }
+          & $runtime --version 2>&1 |
+            Tee-Object -FilePath native/local-asr/windows-bundled-launch.log
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Bundled runtime version probe failed.'
+          }
+          if (-not (Select-String -Quiet -Path native/local-asr/windows-bundled-launch.log -Pattern 'dsh-dictate-asr 0.1.0')) {
+            throw 'Bundled runtime did not reach the Windows console entrypoint.'
+          }
+      - name: Test the native runtime on Windows x64
+        run: cargo test --release --locked --manifest-path native/local-asr/Cargo.toml
+      - name: Build the unsigned Windows x64 runtime
+        run: cargo build --release --locked --manifest-path native/local-asr/Cargo.toml
+      - name: Verify that the freshly built Windows runtime launches
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = 'native/local-asr/target/release/dsh-dictate-asr.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($runtime)
+          if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+            throw 'Windows runtime is not a PE executable.'
+          }
+          & $runtime --version 2>&1 |
+            Tee-Object -FilePath native/local-asr/windows-launch.log
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Runtime version probe failed.'
+          }
+          if (-not (Select-String -Quiet -Path native/local-asr/windows-launch.log -Pattern 'dsh-dictate-asr 0.1.0')) {
+            throw 'Runtime did not reach the Windows console entrypoint.'
+          }
+      - name: Stage the unsigned runtime artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item native/local-asr/target/release/dsh-dictate-asr.exe artifacts/dsh-dictate-asr.exe
+          Get-FileHash artifacts/dsh-dictate-asr.exe -Algorithm SHA256
+      - name: Upload the unsigned Windows x64 runtime
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dsh-dictate-asr-win32-x64
+          path: artifacts/dsh-dictate-asr.exe
+          if-no-files-found: error
