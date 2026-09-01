@@ -26,8 +26,9 @@ named `DSH Dictate Local ASR`. Closing that console stops the local service. No
 Windows service, tray application, installer, or administrator privilege is
 required by the plugin.
 
-Windows x64 support is present in `main` but is not included in the currently
-published npm `dsh-dictate@0.4.0-alpha.7`. User installation, DSH Web
+Windows x64 support is included in the `dsh-dictate@0.4.0-alpha.8` release
+candidate and will be available after npm `next` resolves to that version. It
+is not included in npm `latest` at `0.4.0-alpha.7`. User installation, DSH Web
 authentication and troubleshooting are documented in
 [`docs/windows-x64-local-asr.md`](../../docs/windows-x64-local-asr.md).
 

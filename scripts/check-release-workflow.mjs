@@ -71,7 +71,8 @@ assertContract('GitHub prerelease is created from the workflow SHA with the tarb
   /gh release create[\s\S]*?artifacts\/dsh-dictate-\$\{VERSION\}\.tgz[\s\S]*?--prerelease[\s\S]*?--target "\$GITHUB_SHA"/.test(workflow))
 assertContract('release notes state DSH and platform compatibility',
   /Requires DeepSeek Harness >=0\.1\.2-alpha\.3 <0\.2\.0/.test(workflow)
-    && /Experimental local ASR supports Apple Silicon Macs and unsigned Windows x64/.test(workflow))
+    && /Experimental local ASR supports Apple Silicon Macs and unsigned Windows x64/.test(workflow)
+    && /Mixed rc\.2\/Alpha\.2 profile dependencies may report peer warnings/.test(workflow))
 assertContract('release verifies the bundled Windows x64 runtime',
   /file native\/win32-x64\/dsh-dictate-asr\.exe/.test(workflow)
     && /92b727dbcd7f2edcb7b96bd6e012147480b9ef408c10ed343347e9722b09f5f2/.test(workflow))
