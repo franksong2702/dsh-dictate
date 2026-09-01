@@ -2,7 +2,7 @@
 
 The current `main` branch targets the official `@deepseek-ai/dsh@0.1.2-alpha.3` package graph and the immutable upstream source commit `dd6322d604e00eec1ba5e0c8541159906a21094a`. The compatibility work landed through [PR #8](https://github.com/franksong2702/dsh-dictate/pull/8) at merge commit `1d6a4a229ba631f8f886e4b038289c2db2dbc223`.
 
-This document describes the source currently in `main`. It is not a publication notice: npm `latest` and `next` remain `dsh-dictate@0.4.0-alpha.7`, which targets DSH `0.1.2-alpha.2`. The Windows and Alpha.3 changes require a new package version before they can be published.
+This document describes the `dsh-dictate@0.4.0-alpha.8` release candidate. It is not a publication notice: npm `latest` remains `dsh-dictate@0.4.0-alpha.7`, which targets DSH `0.1.2-alpha.2`. The protected release workflow publishes Alpha.8 to npm `next`; merging the candidate does not publish it.
 
 ## Compatibility scope
 
@@ -62,9 +62,9 @@ Reopen the complete URL printed by `dsh web`; do not publish, log or share its t
 
 ## Remaining release gates
 
-- Choose and commit a new `dsh-dictate` alpha version; do not republish `0.4.0-alpha.7` with different contents.
+- Merge the exact Alpha.8 candidate after all required checks pass.
 - Run the full release workflow and verify the packed artifact digest before npm publication.
-- Confirm the new npm version and `next` dist-tag resolve to that exact artifact.
+- Confirm npm `0.4.0-alpha.8` and the `next` dist-tag resolve to that exact artifact.
 - Keep the Windows executable explicitly unsigned and experimental in release notes.
 
 No npm publish, Git tag or GitHub Release is performed by merging the compatibility PR or this documentation update.

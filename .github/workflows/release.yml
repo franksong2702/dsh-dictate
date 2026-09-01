@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact package version to publish (for example 0.4.0-alpha.7)
+        description: Exact package version to publish (for example 0.4.0-alpha.8)
         required: true
         type: string
       confirm:
@@ -207,4 +207,4 @@ jobs:
             --prerelease \
             --target "$GITHUB_SHA" \
             --generate-notes \
-            --notes 'Requires DeepSeek Harness >=0.1.2-alpha.3 <0.2.0. Experimental local ASR supports Apple Silicon Macs and unsigned Windows x64.'
+            --notes 'Requires DeepSeek Harness >=0.1.2-alpha.3 <0.2.0. Experimental local ASR supports Apple Silicon Macs and unsigned Windows x64. Mixed rc.2/Alpha.2 profile dependencies may report peer warnings; use an Alpha.3-compatible profile.'

@@ -1,6 +1,6 @@
 {
   "name": "dsh-dictate",
-  "version": "0.4.0-alpha.7",
+  "version": "0.4.0-alpha.8",
   "description": "Context-aware voice input for DeepSeek Harness with Web Speech, local SenseVoice transcription, model polish, editable Composer drafts, and user-controlled sending",
   "keywords": [
     "deepseek-harness",
