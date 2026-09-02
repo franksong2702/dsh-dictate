@@ -158,7 +158,7 @@ jobs:
             echo "npm already contains the identical $PACKAGE@$VERSION artifact; resuming after publish."
           elif [[ "$npm_output" == *E404* || "$npm_output" == *'404 Not Found'* || "$npm_output" == *'No match found'* ]]; then
             # Publish the exact artifact verified above; a bare npm publish repacks the tree and changes the digest.
-            npm publish "artifacts/${PACKAGE}-${VERSION}.tgz" --tag next --provenance
+            npm publish "./artifacts/${PACKAGE}-${VERSION}.tgz" --tag next --provenance
           else
             printf '%s\n' "$npm_output" >&2
             exit 1

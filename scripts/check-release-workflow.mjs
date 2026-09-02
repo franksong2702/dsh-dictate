@@ -50,7 +50,7 @@ assertContract('input version is compared with package.json', /package_version[\
 assertContract('git tag target existence is checked before publishing', /git ls-remote --exit-code --refs origin "refs\/tags\/v\$\{VERSION\}"/.test(workflow))
 assertContract('GitHub release target existence is checked before publishing', /gh release view "v\$\{VERSION\}"/.test(workflow))
 
-const packedArtifactPublish = 'npm publish "artifacts/${PACKAGE}-${VERSION}.tgz" --tag next --provenance'
+const packedArtifactPublish = 'npm publish "./artifacts/${PACKAGE}-${VERSION}.tgz" --tag next --provenance'
 const publishIndex = workflow.indexOf(packedArtifactPublish)
 const packageCheckIndex = workflow.indexOf('pnpm run test:package')
 const nativeCheckIndex = workflow.indexOf('codesign --verify --strict')
