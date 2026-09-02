@@ -2,7 +2,7 @@
 
 The current `main` branch targets the official `@deepseek-ai/dsh@0.1.2-alpha.3` package graph and the immutable upstream source commit `dd6322d604e00eec1ba5e0c8541159906a21094a`. The compatibility work landed through [PR #8](https://github.com/franksong2702/dsh-dictate/pull/8) at merge commit `1d6a4a229ba631f8f886e4b038289c2db2dbc223`.
 
-This document describes the `dsh-dictate@0.4.0-alpha.8` release candidate. It is not a publication notice: npm `latest` remains `dsh-dictate@0.4.0-alpha.7`, which targets DSH `0.1.2-alpha.2`. The protected release workflow publishes Alpha.8 to npm `next`; merging the candidate does not publish it.
+This document records the compatibility work shipped in `dsh-dictate@0.4.0-alpha.8`. The protected release workflow published the verified artifact to npm and created the corresponding [GitHub prerelease](https://github.com/franksong2702/dsh-dictate/releases/tag/v0.4.0-alpha.8).
 
 ## Compatibility scope
 
@@ -60,11 +60,11 @@ DSHweb authentication required. Reopen the URL printed by DSHweb.
 
 Reopen the complete URL printed by `dsh web`; do not publish, log or share its token. Once the normal token-to-cookie bootstrap completes, the clean root URL is available in the same browser profile.
 
-## Remaining release gates
+## Publication result and continuing gates
 
-- Merge the exact Alpha.8 candidate after all required checks pass.
-- Run the full release workflow and verify the packed artifact digest before npm publication.
-- Confirm npm `0.4.0-alpha.8` and the `next` dist-tag resolve to that exact artifact.
+- Alpha.8 was published from main commit `03838daaea2d85e8d1d2b4d8b1cff556486593aa` after the release workflow verified the packed artifact and npm digest.
+- Future releases must rerun the full release workflow and verify their packed artifact before npm publication.
+- Each future release must confirm its exact npm version, `next` dist-tag and registry digest before creating the GitHub prerelease.
 - Keep the Windows executable explicitly unsigned and experimental in release notes.
 
-No npm publish, Git tag or GitHub Release is performed by merging the compatibility PR or this documentation update.
+Merging compatibility or documentation changes does not itself publish npm packages, create Git tags or create GitHub Releases.

@@ -8,32 +8,24 @@
 
 ## 快速安装
 
-截至 2026-09-01，npm `latest`/`next` 均为 `dsh-dictate@0.4.0-alpha.7`，要求 DSH `>=0.1.2-alpha.2 <0.2.0`。安装到 Web profile 后，重启对应的 `dsh web` 进程：
+通过 npm `latest` 安装当前公开版本。当前兼容范围为 DSH `>=0.1.2-alpha.3 <0.2.0`；安装到 Web profile 后，重启对应的 `dsh web` 进程：
 
 ```sh
-dsh plugin --profile web add dsh-dictate@0.4.0-alpha.7
+dsh plugin --profile web add dsh-dictate@latest
 ```
 
-安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。“浏览器语音识别”保持默认、无需安装；已发布的 `0.4.0-alpha.7` 在 Apple Silicon Mac 上提供本地识别。
-
-Windows x64 本地识别和 DSH `0.1.2-alpha.3` 兼容改动组成 `0.4.0-alpha.8` 发布候选。发布工作流完成后，可通过 npm `next` 安装：
-
-```sh
-dsh plugin --profile web add dsh-dictate@next
-```
-
-在发布工作流成功前，`next` 仍可能解析到 `0.4.0-alpha.7`；请用 `npm view dsh-dictate dist-tags --json` 核对。Windows 测试步骤见 [Windows x64 本地识别指南](https://github.com/franksong2702/dsh-dictate/blob/main/docs/windows-x64-local-asr.md)。
+安装后前往“设置 → 插件 → 插件配置 → 上下文语音输入”。“浏览器语音识别”保持默认、无需安装；从 `0.4.0-alpha.8` 起，Apple Silicon Mac 和 Windows x64 均可选择实验性的本地识别。可用 `npm view dsh-dictate dist-tags --json` 核对当前渠道版本；Windows 安装和测试步骤见 [Windows x64 本地识别指南](https://github.com/franksong2702/dsh-dictate/blob/main/docs/windows-x64-local-asr.md)。
 
 DSH Web 首次启动会打印一条带认证 token 的本机 URL。若直接访问端口看到 `DSHweb authentication required. Reopen the URL printed by DSHweb.`，请重新打开 DSH 启动输出中的完整 URL；不要复制或分享其中的 token。
 
-## `v0.4.0-alpha.8` 发布候选
+## `v0.4.0-alpha.8` 新增
 
 - 兼容基线与锁定依赖更新为官方 DSH `0.1.2-alpha.3`；上游 canary 同时监测 npm 的 `latest`、`next` 和 `alpha` 渠道。
 - Windows x64 可以像 Apple Silicon 一样从插件设置页完成原生运行程序校验、SenseVoice Q8 模型下载、启动和状态检查。
 - Windows 原生运行程序不签名，也不安装系统服务或托盘程序；启动时会打开名为 `DSH Dictate Local ASR` 的可见命令行窗口，关闭窗口即停止本地识别。
 - 插件不要求管理员权限，也不修改系统 Python、PATH 或全局软件包。Windows 可能根据本机安全策略提示用户确认运行未签名程序。
 - Windows x64 真机安装、DSH Web 认证和语音输入已完成人工验收；自动化 CI 继续覆盖打包、原生运行程序启动和 DSH Alpha.3 源码兼容。人工验收不替代签名、Windows ARM64 或后台服务支持。
-- 这些改动来自已合并的 [PR #8](https://github.com/franksong2702/dsh-dictate/pull/8)。发布到 npm `next` 仍需显式运行受保护的 release workflow；合并源码或文档不会自动发布。
+- 这些改动来自已合并的 [PR #8](https://github.com/franksong2702/dsh-dictate/pull/8)，并已通过受保护的 release workflow 发布到 npm 与 [GitHub Releases](https://github.com/franksong2702/dsh-dictate/releases/tag/v0.4.0-alpha.8)。
 
 ## `v0.4.0-alpha.7` 新增
 
@@ -106,7 +98,7 @@ DSH Web 首次启动会打印一条带认证 token 的本机 URL。若直接访�
 
 ## 配置与数据范围
 
-- “语音识别”默认为“浏览器语音识别”。两个选项会直接说明是否需要安装、是否依赖网络以及音频的处理位置。npm `latest` 的 `0.4.0-alpha.7` 在 Apple Silicon Mac 上提供“本地语音识别（实验性）”；`0.4.0-alpha.8` 发布候选新增 Windows x64。插件自动安装、启动并检查本地识别环境，设置页不要求用户配置服务地址或端口。
+- “语音识别”默认为“浏览器语音识别”。两个选项会直接说明是否需要安装、是否依赖网络以及音频的处理位置。从 `0.4.0-alpha.8` 起，Apple Silicon Mac 与 Windows x64 均提供“本地语音识别（实验性）”。插件自动安装、启动并检查本地识别环境，设置页不要求用户配置服务地址或端口。
 - 本地识别在录音开始前不可用时，插件会提示用户重试，或明确选择“本次改用浏览器识别”；不会根据历史设置自动切换。已经录制的音频如果转写失败，也不会发送到其他服务。
 - 在“设置 → 插件 → 插件配置”的“上下文语音输入”卡片中选择识别语言；设置保存在当前浏览器中。
 - 选择普通话、粤语或繁体中文时，可以启用“优化中英混合识别”。插件会从当前 Session 最近的可见用户/Assistant 文本和 Composer 草稿中提取受限的临时词汇；系统提示词、工具调用、工具结果、图片和 Assistant 推理内容不会参与提取。
@@ -133,11 +125,11 @@ SenseVoiceSmall 模型及原生推理依赖的来源、作者和许可证信息�
 
 ## 兼容性与 Alpha 限制
 
-- `0.4.0-alpha.8` 发布候选面向 DSH `0.1.2-alpha.3`；npm `latest` 的 `0.4.0-alpha.7` 仍面向 DSH `0.1.2-alpha.2`。
+- `0.4.0-alpha.8` 的最低兼容版本为 DSH `0.1.2-alpha.3`；上游 canary 继续独立监测 npm 的 `latest`、`next` 和 `alpha` 渠道。
 - Web Speech 默认模式需要 Chrome 或 Edge 的 Web Speech API。本地端点模式需要浏览器的麦克风与 Web Audio 能力；两种模式首次使用时都需要授予麦克风权限。
 - 本地语音识别是停止录音后的最终转写，目前提供 VAD 语音确认和约 600 ms 尾音保护，但不提供实时临时文字；本地服务由插件手动或随 DSH 自动管理。
 - 中英混合识别优化依赖浏览器及当前语音识别服务对 Web Speech contextual phrases 的支持；不支持时仍保留现有识别与模型润色流程。
-- 本地 ASR 一键安装支持 macOS Apple Silicon；`0.4.0-alpha.8` 发布候选新增 Windows x64。macOS 随包运行程序采用 ad-hoc 签名，尚未使用 Apple Developer ID 公证；Windows `.exe` 明确保持未签名并显示命令行窗口。macOS Intel、Windows ARM64 和 Linux 继续使用 Web Speech。
+- 从 `0.4.0-alpha.8` 起，本地 ASR 一键安装支持 macOS Apple Silicon 和 Windows x64。macOS 随包运行程序采用 ad-hoc 签名，尚未使用 Apple Developer ID 公证；Windows `.exe` 明确保持未签名并显示命令行窗口。macOS Intel、Windows ARM64 和 Linux 继续使用 Web Speech。
 - 当前 DSH 尚未为外部插件开放自定义辅助模型请求的 Session 日志事件。插件辅助模型调用（词汇提取与润色）使用自己的受信 RPC，不会写入 DSH Session 日志；上游提供相应扩展点后应迁移到可重建的日志事件。
 
 ## 开发

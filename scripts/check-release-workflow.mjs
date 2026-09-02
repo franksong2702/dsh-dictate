@@ -3,8 +3,15 @@ import { fileURLToPath } from 'node:url'
 
 const workflowPath = fileURLToPath(new URL('../.github/workflows/release.yml', import.meta.url))
 const packagePath = fileURLToPath(new URL('../package.json', import.meta.url))
+const readmePath = fileURLToPath(new URL('../README.md', import.meta.url))
+const windowsGuidePath = fileURLToPath(new URL('../docs/windows-x64-local-asr.md', import.meta.url))
+const compatibilityGuidePath = fileURLToPath(new URL('../docs/dsh-012-source-compatibility.md', import.meta.url))
 const workflow = readFileSync(workflowPath, 'utf8')
 const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'))
+const readme = readFileSync(readmePath, 'utf8')
+const windowsGuide = readFileSync(windowsGuidePath, 'utf8')
+const compatibilityGuide = readFileSync(compatibilityGuidePath, 'utf8')
+const windowsReleaseVersion = '0.4.0-alpha.8'
 
 const failures = []
 let assertionCount = 0
@@ -53,8 +60,10 @@ assertContract('GitHub release target existence is checked before publishing', /
 const packedArtifactPublish = 'npm publish "./artifacts/${PACKAGE}-${VERSION}.tgz" --tag next --provenance'
 const publishIndex = workflow.indexOf(packedArtifactPublish)
 const packageCheckIndex = workflow.indexOf('pnpm run test:package')
+const dshInstallCheckIndex = workflow.indexOf('pnpm run check:dsh-install')
 const nativeCheckIndex = workflow.indexOf('codesign --verify --strict')
 assertContract('package and native checks precede npm publish', packageCheckIndex >= 0 && nativeCheckIndex > packageCheckIndex && publishIndex > nativeCheckIndex)
+assertContract('isolated DSH installation is a pre-publish release gate', dshInstallCheckIndex > packageCheckIndex && publishIndex > dshInstallCheckIndex)
 assertContract('publish uses the already packed artifact with npm OIDC provenance and next tag', publishIndex >= 0)
 assertContract('an identical npm artifact can safely resume after publishing',
   /npm view "\$PACKAGE\@\$VERSION" version/.test(workflow)
@@ -77,6 +86,19 @@ assertContract('release verifies the bundled Windows x64 runtime',
   /file native\/win32-x64\/dsh-dictate-asr\.exe/.test(workflow)
     && /92b727dbcd7f2edcb7b96bd6e012147480b9ef408c10ed343347e9722b09f5f2/.test(workflow))
 assertContract('package check invokes this contract', packageJson.scripts?.['check:release-workflow'] === 'node scripts/check-release-workflow.mjs')
+assertContract('README identifies the package version as released rather than a candidate',
+  readme.includes(`## \`v${packageJson.version}\` 新增`)
+    && readme.includes('dsh-dictate@latest')
+    && !readme.includes('发布候选')
+    && !/npm `latest`\/`next` 均为/u.test(readme))
+assertContract('Windows guide avoids mutable dist-tag snapshots and candidate wording',
+  windowsGuide.includes(`beginning with \`dsh-dictate@${windowsReleaseVersion}\``)
+    && !windowsGuide.includes('release candidate')
+    && !windowsGuide.includes('which remains'))
+assertContract('compatibility guide records publication without stale remaining gates',
+  compatibilityGuide.includes(`shipped in \`dsh-dictate@${windowsReleaseVersion}\``)
+    && !compatibilityGuide.includes('release candidate')
+    && !compatibilityGuide.includes('## Remaining release gates'))
 
 if (failures.length > 0) {
   console.error(`release workflow contract failed (${failures.length}/${assertionCount}):`)
