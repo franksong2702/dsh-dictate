@@ -18,6 +18,14 @@ dsh plugin --profile web add dsh-dictate@latest
 
 DSH Web 首次启动会打印一条带认证 token 的本机 URL。若直接访问端口看到 `DSHweb authentication required. Reopen the URL printed by DSHweb.`，请重新打开 DSH 启动输出中的完整 URL；不要复制或分享其中的 token。
 
+## `v0.4.0-alpha.9` 新增
+
+- 可在设置中单独启用“按住鼠标录音”：在 Composer 内按住鼠标 500 ms 开始录音，松开后结束并将最终结果写入输入框，不会自动发送。
+- Composer 为空或未选中文字时可在当前光标位置插入转写；部分选中文字时不触发，全部选中时以最终结果替换全文。
+- 录音期间的 Composer 与状态信息会按照实际入口提示操作：鼠标长按显示“松开鼠标”，右 Command／右 Control 显示“再按一次”，麦克风按钮仍显示“再次点击麦克风”。
+- 保留原有麦克风按钮和右侧修饰键入口；三个入口已在当前 DSH 测试环境完成人工验收，自动化测试继续覆盖 textarea 与 Alpha.3+ contenteditable Composer。
+- 兼容范围仍为 DSH `>=0.1.2-alpha.3 <0.2.0`；隔离安装检查已通过当前 npm `latest` 的 DSH `0.1.2-rc.1`。真实麦克风与界面验收仍以用户实际运行环境为准。
+
 ## `v0.4.0-alpha.8` 新增
 
 - 兼容基线与锁定依赖更新为官方 DSH `0.1.2-alpha.3`；上游 canary 同时监测 npm 的 `latest`、`next` 和 `alpha` 渠道。
