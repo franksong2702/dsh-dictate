@@ -154,6 +154,34 @@ describe('Contextual Dictation browser plugin', () => {
     expect(register.mock.calls[2]?.[0]).not.toHaveProperty('order')
   })
 
+  it('reads Composer state from the Alpha.3+ useInput slot Hook', () => {
+    let Recorder: ComponentType<Record<string, unknown>> | undefined
+    const register = vi.fn((entry: { name: string }, component: unknown) => {
+      if (entry.name === 'conversation.input.right') {
+        Recorder = component as ComponentType<Record<string, unknown>>
+      }
+      return vi.fn()
+    })
+    const inject = vi.fn((_name: string, mount: () => unknown) => { mount() })
+    apply({
+      slots: { inject, register },
+      connection: { rpc: { call: vi.fn() } },
+      remote: { session: { modelCatalog: vi.fn() } },
+    } as never)
+
+    expect(Recorder).toBeDefined()
+    render(Recorder === undefined ? null : <Recorder
+      inputActions={{ setDraft: vi.fn(), submit: vi.fn() }}
+      sessionId="alpha5-slot"
+      useInput={(selector: (state: { draft: string; phase: 'plain' }) => unknown) => selector({
+        draft: '',
+        phase: 'plain',
+      })}
+    />)
+
+    expect(screen.getByRole('button', { name: '语音输入' })).not.toBeNull()
+  })
+
   it('loads the current host model catalog for the polishing selector', async () => {
     const components: ComponentType<Record<string, never>>[] = []
     const register = vi.fn((_entry: unknown, component: unknown) => {

@@ -95,6 +95,12 @@ interface VoiceInputProps {
   readonly providers?: Partial<Record<'web-speech' | 'local-endpoint', AsrProvider>>
 }
 
+interface VoiceInputSlotProps extends Omit<VoiceInputProps, 'input'> {
+  /** Alpha.2 supplied a point-in-time value; Alpha.3+ supplies a selector Hook. */
+  readonly input?: VoiceInputProps['input']
+  readonly useInput?: <Selected>(selector: (state: VoiceInputProps['input']) => Selected) => Selected
+}
+
 interface PolishClientRequest {
   readonly sessionId: string
   readonly provider: string
@@ -355,8 +361,8 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.input.right',
     id: 'dictate-recorder',
     order: 10,
-  }, props => <VoiceInputButton
-    {...props as VoiceInputProps}
+  }, props => <VoiceInputSlot
+    {...props as VoiceInputSlotProps}
     polish={polish}
     loadContextTerms={loadContextTerms}
     checkLocalEndpoint={testEndpoint}
@@ -373,6 +379,19 @@ export function apply(ctx: ClientContext): void {
     loadModels={loadModels}
     localService={localService}
   />))
+}
+
+function VoiceInputSlot({ input: legacyInput, useInput, ...props }: VoiceInputSlotProps) {
+  if (useInput !== undefined) return <VoiceInputHookSlot {...props} useInput={useInput} />
+  if (legacyInput === undefined) return null
+  return <VoiceInputButton {...props} input={legacyInput} />
+}
+
+function VoiceInputHookSlot({ useInput, ...props }: Omit<VoiceInputSlotProps, 'input' | 'useInput'> & {
+  readonly useInput: NonNullable<VoiceInputSlotProps['useInput']>
+}) {
+  const input = useInput(state => state)
+  return <VoiceInputButton {...props} input={input} />
 }
 
 /** Manual click-to-start, click-to-stop dictation control. */
