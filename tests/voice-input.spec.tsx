@@ -8,6 +8,7 @@ import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { TranscriptionDock } from '../src/client/TranscriptionDock.tsx'
 import {
   apply,
+  COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT,
   COMPOSER_HOLD_TO_TALK_MS,
   COMPOSER_HOLD_TO_TALK_PROMPT,
   inject as clientServices,
@@ -646,7 +647,7 @@ describe('Contextual Dictation browser plugin', () => {
     render(<SettingsPanel />)
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
 
-    const toggle = screen.getByRole('checkbox', { name: '启用 Composer 按住说话' }) as HTMLInputElement
+    const toggle = screen.getByRole('checkbox', { name: '启用按住鼠标录音' }) as HTMLInputElement
     expect(toggle.checked).toBe(false)
     expect(screen.getByText(/在 Composer 内按住鼠标开始录音/)).not.toBeNull()
 
@@ -1451,6 +1452,7 @@ describe('Contextual Dictation browser plugin', () => {
     act(() => { vi.advanceTimersByTime(1) })
     const recognition = FakeRecognition.instances[0]
     expect(recognition?.startCalls).toBe(1)
+    expect(composer.placeholder).toBe(COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT)
     act(() => {
       recognition?.onstart?.()
       recognition?.emitResults({ text: '实时内容', final: false })
@@ -1460,6 +1462,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     fireEvent.pointerUp(composer, { button: 0, pointerId: 1, isPrimary: true })
     expect(recognition?.stopCalls).toBe(1)
+    expect(composer.placeholder).toBe(COMPOSER_HOLD_TO_TALK_PROMPT)
     act(() => { recognition?.finishWith('插入内容') })
 
     expect(setDraft).toHaveBeenCalledWith('前文插入内容后文')
@@ -1513,8 +1516,11 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.pointerDown(composer, { button: 0, pointerId: 5, isPrimary: true })
     act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
     const recognition = FakeRecognition.instances[0]
+    expect(composer.getAttribute('data-placeholder')).toBe(COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT)
+    expect(composer.getAttribute('aria-label')).toBe(COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT)
     act(() => { recognition?.onstart?.() })
     fireEvent.pointerUp(composer, { button: 0, pointerId: 5, isPrimary: true })
+    expect(composer.getAttribute('data-placeholder')).toBe(COMPOSER_HOLD_TO_TALK_PROMPT)
     act(() => { recognition?.finishWith('空白写入') })
 
     expect(setDraft).toHaveBeenCalledWith('空白写入')

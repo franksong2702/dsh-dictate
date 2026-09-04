@@ -553,10 +553,10 @@ export function SettingsPanel({
                 checked={prefs.composerHoldToTalkEnabled}
                 onChange={event => { updatePrefs({ composerHoldToTalkEnabled: event.currentTarget.checked }) }}
               />
-              <span>启用 Composer 按住说话</span>
+              <span>启用按住鼠标录音</span>
             </label>
             <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-              在 Composer 内按住鼠标开始录音，松开后结束并将最终结果写入光标位置；部分选中文字时不会触发，全部选中时替换全文。不会自动发送。
+              在 Composer 内按住鼠标开始录音，松开后结束，并将结果写入输入框；部分选中文字时不会触发，全部选中时替换全文。不会自动发送。
             </p>
             <label
               htmlFor="dictate-composer-shortcut"

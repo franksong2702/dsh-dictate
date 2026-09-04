@@ -164,6 +164,7 @@ export const DICTATION_MAX_DURATION_MS = 9 * 60 * 1_000
 export const MEANINGFUL_TRANSCRIPTION_STAGE_MS = 3_000
 export const COMPOSER_HOLD_TO_TALK_MS = 500
 export const COMPOSER_HOLD_TO_TALK_PROMPT = '按住鼠标 语音输入文字'
+export const COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT = '松开鼠标结束录音，完成后写入输入框'
 
 type ComposerTextbox = HTMLTextAreaElement | HTMLElement
 
@@ -406,6 +407,7 @@ export function VoiceInputButton({
 }: VoiceInputProps) {
   const [recording, setRecording] = useState(false)
   const [preparing, setPreparing] = useState(false)
+  const [holdActive, setHoldActive] = useState(false)
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
   const sessionRef = useRef<AsrProviderSession>()
   const activeProviderRef = useRef<'web-speech' | 'local-endpoint'>()
@@ -684,6 +686,7 @@ export function VoiceInputButton({
     dictationStartedAtRef.current = undefined
     recordingElapsedMsRef.current = null
     holdCompletionRef.current = undefined
+    setHoldActive(false)
     resetTranscription(sessionId)
   }, [sessionId])
 
@@ -889,6 +892,7 @@ export function VoiceInputButton({
     }
     if (!supported) {
       holdCompletionRef.current = undefined
+      setHoldActive(false)
       clearMessageTimer()
       resetTranscription(sessionId)
       recordingElapsedMsRef.current = null
@@ -1088,6 +1092,7 @@ export function VoiceInputButton({
         startAbortRef.current = undefined
         setRecording(false)
         setPreparing(false)
+        setHoldActive(false)
         const insertion = holdCompletionRef.current
         holdCompletionRef.current = undefined
         const allowAutomaticSend = insertion === undefined
@@ -1123,6 +1128,7 @@ export function VoiceInputButton({
     const rejectSession = (error: unknown): void => {
       clearPermissionStatusTimer()
       holdCompletionRef.current = undefined
+      setHoldActive(false)
       startAbortRef.current = undefined
       activeProviderRef.current = undefined
       setRecording(false)
@@ -1227,32 +1233,33 @@ export function VoiceInputButton({
     const previousAriaLabel = target.getAttribute('aria-label')
     const placeholder = card.querySelector<HTMLElement>('[data-composer-placeholder]')
     const previousPlaceholderText = placeholder?.textContent ?? null
+    const holdPrompt = holdActive ? COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT : COMPOSER_HOLD_TO_TALK_PROMPT
     if (target instanceof HTMLTextAreaElement) {
-      target.placeholder = COMPOSER_HOLD_TO_TALK_PROMPT
+      target.placeholder = holdPrompt
     } else {
-      target.setAttribute('data-placeholder', COMPOSER_HOLD_TO_TALK_PROMPT)
-      target.setAttribute('aria-label', COMPOSER_HOLD_TO_TALK_PROMPT)
-      if (placeholder !== null) placeholder.textContent = COMPOSER_HOLD_TO_TALK_PROMPT
+      target.setAttribute('data-placeholder', holdPrompt)
+      target.setAttribute('aria-label', holdPrompt)
+      if (placeholder !== null) placeholder.textContent = holdPrompt
     }
     return () => {
       const restore = (name: string, value: string | null): void => {
         if (value === null) target.removeAttribute(name)
         else target.setAttribute(name, value)
       }
-      if (target.getAttribute('placeholder') === COMPOSER_HOLD_TO_TALK_PROMPT) {
+      if (target.getAttribute('placeholder') === holdPrompt) {
         restore('placeholder', previousPlaceholder)
       }
-      if (target.getAttribute('data-placeholder') === COMPOSER_HOLD_TO_TALK_PROMPT) {
+      if (target.getAttribute('data-placeholder') === holdPrompt) {
         restore('data-placeholder', previousDataPlaceholder)
       }
-      if (target.getAttribute('aria-label') === COMPOSER_HOLD_TO_TALK_PROMPT) {
+      if (target.getAttribute('aria-label') === holdPrompt) {
         restore('aria-label', previousAriaLabel)
       }
-      if (placeholder?.textContent === COMPOSER_HOLD_TO_TALK_PROMPT) {
+      if (placeholder?.textContent === holdPrompt) {
         placeholder.textContent = previousPlaceholderText
       }
     }
-  }, [input.draft, prefs.composerHoldToTalkEnabled])
+  }, [holdActive, input.draft, prefs.composerHoldToTalkEnabled])
 
   useEffect(() => {
     if (!prefs.composerHoldToTalkEnabled) return
@@ -1278,6 +1285,7 @@ export function VoiceInputButton({
       clearCandidate()
       if (current?.started !== true) return
       holdCompletionRef.current = undefined
+      setHoldActive(false)
       startAbortRef.current?.abort()
       void sessionRef.current?.abort()
     }
@@ -1311,9 +1319,11 @@ export function VoiceInputButton({
         }
         candidate.started = true
         holdCompletionRef.current = candidate.insertion
+        setHoldActive(true)
         toggleRef.current()
         if (sessionRef.current === undefined && startAbortRef.current === undefined) {
           holdCompletionRef.current = undefined
+          setHoldActive(false)
         }
       }, COMPOSER_HOLD_TO_TALK_MS)
     }
@@ -1329,6 +1339,7 @@ export function VoiceInputButton({
       const current = candidate
       clearCandidate()
       if (!current.started) return
+      setHoldActive(false)
       if (sessionRef.current === undefined && startAbortRef.current === undefined) {
         holdCompletionRef.current = undefined
         return
