@@ -14,6 +14,7 @@ import {
   inject as clientServices,
   encodeModelReference,
   joinRecognitionSegments,
+  localRecordingStopInstruction,
   VoiceInputButton,
 } from '../src/client/index.tsx'
 import { loadPrefs, normalizePrefs, updatePrefs } from '../src/client/prefs.ts'
@@ -1472,12 +1473,16 @@ describe('Contextual Dictation browser plugin', () => {
   it('uses mouse-release guidance for a local recording started by holding Composer', () => {
     updatePrefs({ composerHoldToTalkEnabled: true, transcriptionProvider: 'local-endpoint' })
     let callbacks: AsrProviderStartOptions | undefined
+    const stop = vi.fn(async () => {
+      callbacks?.onStatus?.('stopping')
+      callbacks?.onEnd?.('stop')
+    })
     const provider: AsrProvider = {
       start: vi.fn((options = {}) => {
         callbacks = options
         options.onStart?.()
         return {
-          stop: vi.fn(async () => {}),
+          stop,
           abort: vi.fn(async () => { options.onEnd?.('abort') }),
           updateTerms: vi.fn(async () => {}),
         }
@@ -1499,6 +1504,16 @@ describe('Contextual Dictation browser plugin', () => {
     act(() => { callbacks?.onProgress?.({ phase: 'voice', message: '已检测到语音' }) })
     expect(screen.getByRole('status').textContent).toContain('已检测到语音；松开鼠标结束录音并转写')
     expect(screen.getByRole('status').textContent).not.toContain('再次点击麦克风')
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 9, isPrimary: true })
+  })
+
+  it.each([
+    ['microphone', 'Mozilla/5.0 (Macintosh)', '再次点击麦克风结束并转写'],
+    ['composer-hold', 'Mozilla/5.0 (Macintosh)', '松开鼠标结束录音并转写'],
+    ['keyboard-shortcut', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', '再按一次右 Command 结束录音并转写'],
+    ['keyboard-shortcut', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', '再按一次右 Control 结束录音并转写'],
+  ] as const)('maps the %s trigger to its local recording guidance', (trigger, userAgent, expected) => {
+    expect(localRecordingStopInstruction(trigger, userAgent)).toBe(expected)
   })
 
   it('does not start for a short press or partial selection and replaces a whole selection', () => {

@@ -145,6 +145,18 @@ function rightModifierCode(userAgent: string): 'MetaRight' | 'ControlRight' {
   return /\bMacintosh\b|\bMac OS X\b/i.test(userAgent) ? 'MetaRight' : 'ControlRight'
 }
 
+export type VoiceInputTrigger = 'microphone' | 'composer-hold' | 'keyboard-shortcut'
+
+export function localRecordingStopInstruction(trigger: VoiceInputTrigger, userAgent: string): string {
+  if (trigger === 'composer-hold') return '松开鼠标结束录音并转写'
+  if (trigger === 'keyboard-shortcut') {
+    return rightModifierCode(userAgent) === 'MetaRight'
+      ? '再按一次右 Command 结束录音并转写'
+      : '再按一次右 Control 结束录音并转写'
+  }
+  return '再次点击麦克风结束并转写'
+}
+
 function contextTermsKey(
   request: ContextTermsRequest,
   composerPhase: VoiceInputProps['input']['phase'],
@@ -436,7 +448,8 @@ export function VoiceInputButton({
     readonly promise: Promise<readonly ContextTerm[]>
   }>()
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const toggleRef = useRef<() => void>(() => {})
+  const toggleRef = useRef<(trigger?: VoiceInputTrigger) => void>(() => {})
+  const startTriggerRef = useRef<VoiceInputTrigger>('microphone')
   const holdCompletionRef = useRef<ComposerInsertion>()
   draftRef.current = input.draft
   actionsRef.current = inputActions
@@ -845,7 +858,7 @@ export function VoiceInputButton({
     }
   }
 
-  const toggle = (): void => {
+  const toggle = (trigger: VoiceInputTrigger = 'microphone'): void => {
     const activeSession = sessionRef.current
     if (activeSession !== undefined) {
       if (finalizingRef.current) {
@@ -907,6 +920,7 @@ export function VoiceInputButton({
       return
     }
 
+    startTriggerRef.current = trigger
     clearTermsDebounce()
     polishAbortRef.current?.abort()
     polishAbortRef.current = undefined
@@ -979,9 +993,10 @@ export function VoiceInputButton({
         setPreparing(false)
         setRecording(true)
         startDictationTimers(localMode)
-        const localStopInstruction = holdCompletionRef.current === undefined
-          ? '再次点击麦克风结束并转写'
-          : '松开鼠标结束录音并转写'
+        const localStopInstruction = localRecordingStopInstruction(
+          startTriggerRef.current,
+          window.navigator.userAgent,
+        )
         updateTranscription(sessionId, {
           phase: 'listening',
           finalText: '',
@@ -1058,9 +1073,10 @@ export function VoiceInputButton({
         if (countdownActiveRef.current && !finalizingRef.current) return
         if (progress.phase === 'voice') {
           if (!localMode || finalizingRef.current) return
-          const localStopInstruction = holdCompletionRef.current === undefined
-            ? '再次点击麦克风结束并转写'
-            : '松开鼠标结束录音并转写'
+          const localStopInstruction = localRecordingStopInstruction(
+            startTriggerRef.current,
+            window.navigator.userAgent,
+          )
           updateTranscription(sessionId, {
             phase: 'listening',
             status: '正在录音中',
@@ -1326,7 +1342,7 @@ export function VoiceInputButton({
         candidate.started = true
         holdCompletionRef.current = candidate.insertion
         setHoldActive(true)
-        toggleRef.current()
+        toggleRef.current('composer-hold')
         if (sessionRef.current === undefined && startAbortRef.current === undefined) {
           holdCompletionRef.current = undefined
           setHoldActive(false)
@@ -1350,7 +1366,7 @@ export function VoiceInputButton({
         holdCompletionRef.current = undefined
         return
       }
-      toggleRef.current()
+      toggleRef.current('composer-hold')
     }
     target.addEventListener('pointerdown', onPointerDown)
     target.addEventListener('pointermove', onPointerMove)
@@ -1407,7 +1423,7 @@ export function VoiceInputButton({
       if (event.code !== modifierCode) return
       const shouldToggle = armed && !chorded && !event.isComposing && ownsFocusedComposer(event.target)
       reset()
-      if (shouldToggle) toggleRef.current()
+      if (shouldToggle) toggleRef.current('keyboard-shortcut')
     }
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
@@ -1435,7 +1451,7 @@ export function VoiceInputButton({
           : prefs.transcriptionProvider === 'web-speech'
             ? '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'
             : '当前浏览器不支持本地录音，请使用最新版 Chrome 或 Edge'}
-        onClick={toggle}
+        onClick={() => { toggle('microphone') }}
         style={{
           width: 28,
           height: 28,
