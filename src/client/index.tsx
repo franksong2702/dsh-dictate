@@ -156,6 +156,64 @@ const WEB_SPEECH_PROVIDER = createWebSpeechProvider()
 export const DICTATION_WARNING_MS = 8 * 60 * 1_000
 export const DICTATION_MAX_DURATION_MS = 9 * 60 * 1_000
 export const MEANINGFUL_TRANSCRIPTION_STAGE_MS = 3_000
+export const COMPOSER_HOLD_TO_TALK_MS = 500
+export const COMPOSER_HOLD_TO_TALK_PROMPT = '按住鼠标 语音输入文字'
+
+type ComposerTextbox = HTMLTextAreaElement | HTMLElement
+
+interface ComposerInsertion {
+  readonly draft: string
+  readonly start: number
+  readonly end: number
+}
+
+function isComposerTextbox(element: Element): element is ComposerTextbox {
+  return element instanceof HTMLTextAreaElement
+    || (element instanceof HTMLElement
+      && element.getAttribute('contenteditable') === 'true'
+      && element.getAttribute('role') === 'textbox')
+}
+
+function composerTextbox(card: Element): ComposerTextbox | undefined {
+  const candidate = card.querySelector('textarea, [contenteditable="true"][role="textbox"]')
+  return candidate !== null && isComposerTextbox(candidate) ? candidate : undefined
+}
+
+function rangeOffset(root: HTMLElement, node: Node, offset: number): number | undefined {
+  if (node !== root && !root.contains(node)) return undefined
+  try {
+    const probe = document.createRange()
+    probe.selectNodeContents(root)
+    probe.setEnd(node, offset)
+    return probe.toString().length
+  } catch {
+    return undefined
+  }
+}
+
+/** Capture the existing Composer caret or whole-draft selection before pointerdown changes it. */
+export function captureComposerInsertion(target: ComposerTextbox, draft: string): ComposerInsertion | undefined {
+  let start: number
+  let end: number
+  if (target instanceof HTMLTextAreaElement) {
+    start = target.selectionStart
+    end = target.selectionEnd
+  } else {
+    const selection = window.getSelection()
+    if (selection === null || selection.rangeCount === 0) {
+      return draft === '' ? { draft, start: 0, end: 0 } : undefined
+    }
+    const range = selection.getRangeAt(0)
+    const rangeStart = rangeOffset(target, range.startContainer, range.startOffset)
+    const rangeEnd = rangeOffset(target, range.endContainer, range.endOffset)
+    if (rangeStart === undefined || rangeEnd === undefined) return undefined
+    start = rangeStart
+    end = rangeEnd
+  }
+  if (start < 0 || end < start || end > draft.length) return undefined
+  if (start !== end && (start !== 0 || end !== draft.length)) return undefined
+  return { draft, start, end }
+}
 
 const COUNTDOWN_ANNOUNCEMENT_SECONDS = new Set([60, 30, 10, 5, 4, 3, 2, 1])
 
@@ -358,6 +416,7 @@ export function VoiceInputButton({
   }>()
   const buttonRef = useRef<HTMLButtonElement>(null)
   const toggleRef = useRef<() => void>(() => {})
+  const holdCompletionRef = useRef<ComposerInsertion>()
   draftRef.current = input.draft
   actionsRef.current = inputActions
 
@@ -605,6 +664,7 @@ export function VoiceInputButton({
     finalizingStartedAtRef.current = undefined
     dictationStartedAtRef.current = undefined
     recordingElapsedMsRef.current = null
+    holdCompletionRef.current = undefined
     resetTranscription(sessionId)
   }, [sessionId])
 
@@ -646,13 +706,28 @@ export function VoiceInputButton({
     shouldLoadContextTerms,
   ])
 
-  const insertTranscript = (transcript: string, allowAutomaticSend: boolean): void => {
+  const insertTranscript = (
+    transcript: string,
+    allowAutomaticSend: boolean,
+    insertion?: ComposerInsertion,
+  ): boolean => {
+    if (insertion !== undefined) {
+      if (draftRef.current !== insertion.draft) {
+        showTransientMessage('转写未写入', '录音期间输入框内容发生变化，请重试', true)
+        return false
+      }
+      const nextDraft = `${insertion.draft.slice(0, insertion.start)}${transcript}${insertion.draft.slice(insertion.end)}`
+      draftRef.current = nextDraft
+      actionsRef.current.setDraft(nextDraft)
+      return true
+    }
     const current = draftRef.current.trim()
     const prefix = current === '' ? '' : `${draftRef.current} `
     const nextDraft = `${prefix}${transcript}`
     draftRef.current = nextDraft
     actionsRef.current.setDraft(nextDraft)
     if (allowAutomaticSend) actionsRef.current.submit()
+    return true
   }
 
   const termsForPolish = (selected: ModelReference): readonly ContextTerm[] => {
@@ -667,11 +742,25 @@ export function VoiceInputButton({
     return []
   }
 
-  const finishTranscript = async (transcript: string, allowAutomaticSend: boolean): Promise<void> => {
+  const finishTranscript = async (
+    transcript: string,
+    allowAutomaticSend: boolean,
+    insertion?: ComposerInsertion,
+  ): Promise<void> => {
     const selected = selectedModel
+    if (insertion !== undefined && prefs.modelPolishEnabled
+      && (polish === undefined || selected === undefined)) {
+      finishFinalizingStage(false)
+      showTransientMessage(
+        '润色未完成',
+        selected === undefined ? '请选择润色模型；输入框内容保持不变' : '润色服务不可用；输入框内容保持不变',
+        true,
+      )
+      return
+    }
     if (!prefs.modelPolishEnabled || polish === undefined || selected === undefined) {
       finishFinalizingStage(false)
-      insertTranscript(transcript, allowAutomaticSend)
+      if (!insertTranscript(transcript, allowAutomaticSend, insertion)) return
       const polishUnavailable = prefs.modelPolishEnabled && selected === undefined
       showTransientMessage(
         polishUnavailable ? '润色未完成' : '已转写完成',
@@ -712,13 +801,17 @@ export function VoiceInputButton({
         terms,
       }, controller.signal)
       if (controller.signal.aborted) return
-      insertTranscript(text, allowAutomaticSend)
+      if (!insertTranscript(text, allowAutomaticSend, insertion)) return
       showTransientMessage(
         '已润色完成',
         allowAutomaticSend ? '最终结果已直接发送' : '最终结果已写入输入框',
       )
     } catch {
       if (controller.signal.aborted) return
+      if (insertion !== undefined) {
+        showTransientMessage('润色未完成', '输入框内容保持不变，请重试', true)
+        return
+      }
       insertTranscript(transcript, allowAutomaticSend)
       showTransientMessage(
         '润色未完成',
@@ -776,6 +869,7 @@ export function VoiceInputButton({
       if (!retryAfterPreflightError) return
     }
     if (!supported) {
+      holdCompletionRef.current = undefined
       clearMessageTimer()
       resetTranscription(sessionId)
       recordingElapsedMsRef.current = null
@@ -975,13 +1069,16 @@ export function VoiceInputButton({
         startAbortRef.current = undefined
         setRecording(false)
         setPreparing(false)
-        const allowAutomaticSend = reason === 'stop' && finalizingRef.current
+        const insertion = holdCompletionRef.current
+        holdCompletionRef.current = undefined
+        const allowAutomaticSend = insertion === undefined
+          && reason === 'stop' && finalizingRef.current
           && !automaticStopRef.current && prefs.autoSendEnabled
         finalizingRef.current = false
         automaticStopRef.current = false
         const transcript = currentFinalText().trim()
         if (transcript !== '') {
-          void finishTranscript(transcript, allowAutomaticSend)
+          void finishTranscript(transcript, allowAutomaticSend, insertion)
         } else if (!failedRef.current && reason !== 'abort') {
           showTransientMessage('转写未完成', '没有识别到语音，请重试', true)
         } else if (reason === 'abort' && !failedRef.current) {
@@ -1006,6 +1103,7 @@ export function VoiceInputButton({
     }
     const rejectSession = (error: unknown): void => {
       clearPermissionStatusTimer()
+      holdCompletionRef.current = undefined
       startAbortRef.current = undefined
       activeProviderRef.current = undefined
       setRecording(false)
@@ -1098,6 +1196,140 @@ export function VoiceInputButton({
     }
   }
   toggleRef.current = toggle
+
+  useEffect(() => {
+    if (!prefs.composerHoldToTalkEnabled) return
+    const card = buttonRef.current?.closest('[data-composer-card]')
+    if (card === null || card === undefined) return
+    const target = composerTextbox(card)
+    if (target === undefined) return
+    const previousPlaceholder = target.getAttribute('placeholder')
+    const previousDataPlaceholder = target.getAttribute('data-placeholder')
+    const previousAriaLabel = target.getAttribute('aria-label')
+    const placeholder = card.querySelector<HTMLElement>('[data-composer-placeholder]')
+    const previousPlaceholderText = placeholder?.textContent ?? null
+    if (target instanceof HTMLTextAreaElement) {
+      target.placeholder = COMPOSER_HOLD_TO_TALK_PROMPT
+    } else {
+      target.setAttribute('data-placeholder', COMPOSER_HOLD_TO_TALK_PROMPT)
+      target.setAttribute('aria-label', COMPOSER_HOLD_TO_TALK_PROMPT)
+      if (placeholder !== null) placeholder.textContent = COMPOSER_HOLD_TO_TALK_PROMPT
+    }
+    return () => {
+      const restore = (name: string, value: string | null): void => {
+        if (value === null) target.removeAttribute(name)
+        else target.setAttribute(name, value)
+      }
+      if (target.getAttribute('placeholder') === COMPOSER_HOLD_TO_TALK_PROMPT) {
+        restore('placeholder', previousPlaceholder)
+      }
+      if (target.getAttribute('data-placeholder') === COMPOSER_HOLD_TO_TALK_PROMPT) {
+        restore('data-placeholder', previousDataPlaceholder)
+      }
+      if (target.getAttribute('aria-label') === COMPOSER_HOLD_TO_TALK_PROMPT) {
+        restore('aria-label', previousAriaLabel)
+      }
+      if (placeholder?.textContent === COMPOSER_HOLD_TO_TALK_PROMPT) {
+        placeholder.textContent = previousPlaceholderText
+      }
+    }
+  }, [input.draft, prefs.composerHoldToTalkEnabled])
+
+  useEffect(() => {
+    if (!prefs.composerHoldToTalkEnabled) return
+    const card = buttonRef.current?.closest('[data-composer-card]')
+    if (card === null || card === undefined) return
+    const target = composerTextbox(card)
+    if (target === undefined) return
+    let timer: number | undefined
+    let candidate: {
+      readonly pointerId: number
+      readonly x: number
+      readonly y: number
+      readonly insertion: ComposerInsertion
+      started: boolean
+    } | undefined
+    const clearCandidate = (): void => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = undefined
+      candidate = undefined
+    }
+    const cancelActiveHold = (): void => {
+      const current = candidate
+      clearCandidate()
+      if (current?.started !== true) return
+      holdCompletionRef.current = undefined
+      startAbortRef.current?.abort()
+      void sessionRef.current?.abort()
+    }
+    const onPointerDown: EventListener = (rawEvent): void => {
+      const event = rawEvent as PointerEvent
+      const button = event.button ?? 0
+      const pointerId = event.pointerId ?? 0
+      if (button !== 0 || event.isPrimary === false || candidate !== undefined
+        || sessionRef.current !== undefined || startAbortRef.current !== undefined
+        || finalizingRef.current) return
+      const insertion = captureComposerInsertion(target, draftRef.current)
+      if (insertion === undefined) return
+      if (insertion.start === 0 && insertion.end === insertion.draft.length && insertion.start !== insertion.end) {
+        event.preventDefault()
+      }
+      candidate = {
+        pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        insertion,
+        started: false,
+      }
+      try { target.setPointerCapture(pointerId) } catch { /* Pointer capture is optional in older hosts. */ }
+      timer = window.setTimeout(() => {
+        timer = undefined
+        if (candidate === undefined) return
+        if (sessionRef.current !== undefined || startAbortRef.current !== undefined
+          || finalizingRef.current) {
+          clearCandidate()
+          return
+        }
+        candidate.started = true
+        holdCompletionRef.current = candidate.insertion
+        toggleRef.current()
+        if (sessionRef.current === undefined && startAbortRef.current === undefined) {
+          holdCompletionRef.current = undefined
+        }
+      }, COMPOSER_HOLD_TO_TALK_MS)
+    }
+    const onPointerMove: EventListener = (rawEvent): void => {
+      const event = rawEvent as PointerEvent
+      if (candidate === undefined || candidate.started) return
+      if (Math.hypot(event.clientX - candidate.x, event.clientY - candidate.y) <= 8) return
+      clearCandidate()
+    }
+    const onPointerUp: EventListener = (rawEvent): void => {
+      const event = rawEvent as PointerEvent
+      if (candidate === undefined || (event.pointerId ?? 0) !== candidate.pointerId) return
+      const current = candidate
+      clearCandidate()
+      if (!current.started) return
+      if (sessionRef.current === undefined && startAbortRef.current === undefined) {
+        holdCompletionRef.current = undefined
+        return
+      }
+      toggleRef.current()
+    }
+    target.addEventListener('pointerdown', onPointerDown)
+    target.addEventListener('pointermove', onPointerMove)
+    target.addEventListener('pointerup', onPointerUp)
+    target.addEventListener('pointercancel', cancelActiveHold)
+    window.addEventListener('blur', cancelActiveHold)
+    return () => {
+      cancelActiveHold()
+      target.removeEventListener('pointerdown', onPointerDown)
+      target.removeEventListener('pointermove', onPointerMove)
+      target.removeEventListener('pointerup', onPointerUp)
+      target.removeEventListener('pointercancel', cancelActiveHold)
+      window.removeEventListener('blur', cancelActiveHold)
+    }
+  }, [prefs.composerHoldToTalkEnabled])
 
   useEffect(() => {
     if (!prefs.composerShortcutEnabled) return

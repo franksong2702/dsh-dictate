@@ -544,6 +544,21 @@ export function SettingsPanel({
           </h4>
           <div style={{ display: 'grid', gap: 8, marginTop: 18, maxWidth: 520 }}>
             <label
+              htmlFor="dictate-composer-hold-to-talk"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
+            >
+              <input
+                id="dictate-composer-hold-to-talk"
+                type="checkbox"
+                checked={prefs.composerHoldToTalkEnabled}
+                onChange={event => { updatePrefs({ composerHoldToTalkEnabled: event.currentTarget.checked }) }}
+              />
+              <span>启用 Composer 按住说话</span>
+            </label>
+            <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+              在 Composer 内按住鼠标开始录音，松开后结束并将最终结果写入光标位置；部分选中文字时不会触发，全部选中时替换全文。不会自动发送。
+            </p>
+            <label
               htmlFor="dictate-composer-shortcut"
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500 }}
             >
