@@ -1469,6 +1469,38 @@ describe('Contextual Dictation browser plugin', () => {
     expect(submit).not.toHaveBeenCalled()
   })
 
+  it('uses mouse-release guidance for a local recording started by holding Composer', () => {
+    updatePrefs({ composerHoldToTalkEnabled: true, transcriptionProvider: 'local-endpoint' })
+    let callbacks: AsrProviderStartOptions | undefined
+    const provider: AsrProvider = {
+      start: vi.fn((options = {}) => {
+        callbacks = options
+        options.onStart?.()
+        return {
+          stop: vi.fn(async () => {}),
+          abort: vi.fn(async () => { options.onEnd?.('abort') }),
+          updateTerms: vi.fn(async () => {}),
+        }
+      }),
+    }
+    render(voiceComposer({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'hold-local-copy',
+      providers: { 'local-endpoint': provider },
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 9, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    expect(screen.getByRole('status').textContent).toContain('松开鼠标结束录音并转写')
+    expect(screen.getByRole('status').textContent).not.toContain('再次点击麦克风')
+
+    act(() => { callbacks?.onProgress?.({ phase: 'voice', message: '已检测到语音' }) })
+    expect(screen.getByRole('status').textContent).toContain('已检测到语音；松开鼠标结束录音并转写')
+    expect(screen.getByRole('status').textContent).not.toContain('再次点击麦克风')
+  })
+
   it('does not start for a short press or partial selection and replaces a whole selection', () => {
     updatePrefs({ composerHoldToTalkEnabled: true })
     const setDraft = vi.fn()

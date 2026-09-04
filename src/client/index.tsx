@@ -979,18 +979,21 @@ export function VoiceInputButton({
         setPreparing(false)
         setRecording(true)
         startDictationTimers(localMode)
+        const localStopInstruction = holdCompletionRef.current === undefined
+          ? '再次点击麦克风结束并转写'
+          : '松开鼠标结束录音并转写'
         updateTranscription(sessionId, {
           phase: 'listening',
           finalText: '',
           interimText: '',
           status: localMode ? '正在录音中' : '正在听写中',
           hint: localMode
-            ? '再次点击麦克风结束并转写'
+            ? localStopInstruction
             : fallbackNotice
               ? '本地语音识别暂不可用，本次已改用浏览器语音识别；请开始说话…'
               : '请开始说话…',
           announcement: localMode
-            ? '正在录音中。再次点击麦克风结束并转写'
+            ? `正在录音中。${localStopInstruction}`
             : fallbackNotice
               ? '正在听写中。本次已改用浏览器语音识别，请开始说话'
               : '正在听写中。请开始说话',
@@ -1055,10 +1058,13 @@ export function VoiceInputButton({
         if (countdownActiveRef.current && !finalizingRef.current) return
         if (progress.phase === 'voice') {
           if (!localMode || finalizingRef.current) return
+          const localStopInstruction = holdCompletionRef.current === undefined
+            ? '再次点击麦克风结束并转写'
+            : '松开鼠标结束录音并转写'
           updateTranscription(sessionId, {
             phase: 'listening',
             status: '正在录音中',
-            hint: '已检测到语音；再次点击麦克风结束并转写',
+            hint: `已检测到语音；${localStopInstruction}`,
             announcement: '正在录音中。已检测到语音',
             action: null,
           })
