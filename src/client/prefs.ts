@@ -34,6 +34,7 @@ export interface VoiceInputPrefs {
   readonly lang: string
   readonly mixedLanguageOptimizationEnabled: boolean
   readonly composerShortcutEnabled: boolean
+  readonly composerHoldToTalkEnabled: boolean
   readonly modelPolishEnabled: boolean
   readonly selectedModel: string
   readonly autoSendEnabled: boolean
@@ -46,6 +47,7 @@ export const DEFAULT_PREFS: VoiceInputPrefs = {
   lang: 'zh-CN',
   mixedLanguageOptimizationEnabled: false,
   composerShortcutEnabled: false,
+  composerHoldToTalkEnabled: false,
   modelPolishEnabled: false,
   selectedModel: '',
   autoSendEnabled: false,
@@ -77,6 +79,7 @@ export function normalizePrefs(raw: unknown): VoiceInputPrefs {
     lang?: unknown
     mixedLanguageOptimizationEnabled?: unknown
     composerShortcutEnabled?: unknown
+    composerHoldToTalkEnabled?: unknown
     modelPolishEnabled?: unknown
     selectedModel?: unknown
     autoSendEnabled?: unknown
@@ -101,6 +104,9 @@ export function normalizePrefs(raw: unknown): VoiceInputPrefs {
     composerShortcutEnabled: typeof candidate.composerShortcutEnabled === 'boolean'
       ? candidate.composerShortcutEnabled
       : DEFAULT_PREFS.composerShortcutEnabled,
+    composerHoldToTalkEnabled: typeof candidate.composerHoldToTalkEnabled === 'boolean'
+      ? candidate.composerHoldToTalkEnabled
+      : DEFAULT_PREFS.composerHoldToTalkEnabled,
     modelPolishEnabled: typeof candidate.modelPolishEnabled === 'boolean'
       ? candidate.modelPolishEnabled
       : DEFAULT_PREFS.modelPolishEnabled,

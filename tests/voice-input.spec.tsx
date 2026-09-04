@@ -8,9 +8,13 @@ import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { TranscriptionDock } from '../src/client/TranscriptionDock.tsx'
 import {
   apply,
+  COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT,
+  COMPOSER_HOLD_TO_TALK_MS,
+  COMPOSER_HOLD_TO_TALK_PROMPT,
   inject as clientServices,
   encodeModelReference,
   joinRecognitionSegments,
+  localRecordingStopInstruction,
   VoiceInputButton,
 } from '../src/client/index.tsx'
 import { loadPrefs, normalizePrefs, updatePrefs } from '../src/client/prefs.ts'
@@ -117,6 +121,7 @@ describe('Contextual Dictation browser plugin', () => {
       lang: 'zh-CN',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
+      composerHoldToTalkEnabled: false,
       modelPolishEnabled: false,
       selectedModel: '',
       autoSendEnabled: false,
@@ -149,6 +154,34 @@ describe('Contextual Dictation browser plugin', () => {
     })
     expect(register.mock.calls[2]?.[0]).not.toHaveProperty('id')
     expect(register.mock.calls[2]?.[0]).not.toHaveProperty('order')
+  })
+
+  it('reads Composer state from the Alpha.3+ useInput slot Hook', () => {
+    let Recorder: ComponentType<Record<string, unknown>> | undefined
+    const register = vi.fn((entry: { name: string }, component: unknown) => {
+      if (entry.name === 'conversation.input.right') {
+        Recorder = component as ComponentType<Record<string, unknown>>
+      }
+      return vi.fn()
+    })
+    const inject = vi.fn((_name: string, mount: () => unknown) => { mount() })
+    apply({
+      slots: { inject, register },
+      connection: { rpc: { call: vi.fn() } },
+      remote: { session: { modelCatalog: vi.fn() } },
+    } as never)
+
+    expect(Recorder).toBeDefined()
+    render(Recorder === undefined ? null : <Recorder
+      inputActions={{ setDraft: vi.fn(), submit: vi.fn() }}
+      sessionId="alpha5-slot"
+      useInput={(selector: (state: { draft: string; phase: 'plain' }) => unknown) => selector({
+        draft: '',
+        phase: 'plain',
+      })}
+    />)
+
+    expect(screen.getByRole('button', { name: '语音输入' })).not.toBeNull()
   })
 
   it('loads the current host model catalog for the polishing selector', async () => {
@@ -268,7 +301,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.change(screen.getByLabelText('识别语言'), { target: { value: 'ja-JP' } })
     expect(loadPrefs().lang).toBe('ja-JP')
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"ja-JP","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"composerHoldToTalkEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
 
     first.unmount()
@@ -285,6 +318,7 @@ describe('Contextual Dictation browser plugin', () => {
       lang: 'ja-JP',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
+      composerHoldToTalkEnabled: false,
       modelPolishEnabled: false,
       selectedModel: '',
       autoSendEnabled: false,
@@ -296,6 +330,7 @@ describe('Contextual Dictation browser plugin', () => {
       lang: 'en-US',
       mixedLanguageOptimizationEnabled: false,
       composerShortcutEnabled: false,
+      composerHoldToTalkEnabled: false,
       modelPolishEnabled: true,
       selectedModel: 'deepseek-chat',
       autoSendEnabled: false,
@@ -573,7 +608,7 @@ describe('Contextual Dictation browser plugin', () => {
 
     expect(loadPrefs().selectedModel).toBe('deepseek-reasoner')
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"composerHoldToTalkEnabled":false,"modelPolishEnabled":true,"selectedModel":"deepseek-reasoner","autoSendEnabled":false}',
     )
   })
 
@@ -590,7 +625,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(toggle)
     expect(loadPrefs().autoSendEnabled).toBe(true)
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"composerHoldToTalkEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":true}',
     )
   })
 
@@ -605,7 +640,22 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(shortcut)
     expect(loadPrefs().composerShortcutEnabled).toBe(true)
     expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
-      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":true,"composerHoldToTalkEnabled":false,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
+    )
+  })
+
+  it('keeps Composer hold-to-talk off by default and persists explicit opt-in', () => {
+    render(<SettingsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
+
+    const toggle = screen.getByRole('checkbox', { name: '启用按住鼠标录音' }) as HTMLInputElement
+    expect(toggle.checked).toBe(false)
+    expect(screen.getByText(/在 Composer 内按住鼠标开始录音/)).not.toBeNull()
+
+    fireEvent.click(toggle)
+    expect(loadPrefs().composerHoldToTalkEnabled).toBe(true)
+    expect(window.localStorage.getItem('dsh-dictate.prefs.v1')).toBe(
+      '{"transcriptionProvider":"web-speech","localEndpoint":"http://127.0.0.1:39081","localFallbackPolicy":"local-only","lang":"zh-CN","mixedLanguageOptimizationEnabled":false,"composerShortcutEnabled":false,"composerHoldToTalkEnabled":true,"modelPolishEnabled":false,"selectedModel":"","autoSendEnabled":false}',
     )
   })
 
@@ -1367,6 +1417,241 @@ describe('Contextual Dictation browser plugin', () => {
     act(() => { FakeRecognition.instances[2]?.onend?.() })
 
     expect(setDraft).toHaveBeenCalledWith('第一段第一段')
+  })
+
+  it('leaves Composer pointer behavior and its prompt unchanged while hold-to-talk is disabled', () => {
+    render(voiceComposer({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'hold-disabled',
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' }) as HTMLTextAreaElement
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 1, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+
+    expect(FakeRecognition.instances).toHaveLength(0)
+    expect(composer.placeholder).not.toBe(COMPOSER_HOLD_TO_TALK_PROMPT)
+  })
+
+  it('starts only after the hold threshold, previews above Composer, and inserts at the caret without sending', () => {
+    updatePrefs({ composerHoldToTalkEnabled: true, autoSendEnabled: true })
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    render(voiceComposer({
+      inputActions: { setDraft, submit },
+      input: { draft: '前文后文' },
+      sessionId: 'hold-caret',
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' }) as HTMLTextAreaElement
+    composer.value = '前文后文'
+    composer.setSelectionRange(2, 2)
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 1, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS - 1) })
+    expect(FakeRecognition.instances).toHaveLength(0)
+    act(() => { vi.advanceTimersByTime(1) })
+    const recognition = FakeRecognition.instances[0]
+    expect(recognition?.startCalls).toBe(1)
+    expect(composer.placeholder).toBe(COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT)
+    act(() => {
+      recognition?.onstart?.()
+      recognition?.emitResults({ text: '实时内容', final: false })
+    })
+    expect(document.querySelector('[data-transcription-preview]')?.textContent).toContain('实时内容')
+    expect(setDraft).not.toHaveBeenCalled()
+
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 1, isPrimary: true })
+    expect(recognition?.stopCalls).toBe(1)
+    expect(composer.placeholder).toBe(COMPOSER_HOLD_TO_TALK_PROMPT)
+    act(() => { recognition?.finishWith('插入内容') })
+
+    expect(setDraft).toHaveBeenCalledWith('前文插入内容后文')
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('uses mouse-release guidance for a local recording started by holding Composer', () => {
+    updatePrefs({ composerHoldToTalkEnabled: true, transcriptionProvider: 'local-endpoint' })
+    let callbacks: AsrProviderStartOptions | undefined
+    const stop = vi.fn(async () => {
+      callbacks?.onStatus?.('stopping')
+      callbacks?.onEnd?.('stop')
+    })
+    const provider: AsrProvider = {
+      start: vi.fn((options = {}) => {
+        callbacks = options
+        options.onStart?.()
+        return {
+          stop,
+          abort: vi.fn(async () => { options.onEnd?.('abort') }),
+          updateTerms: vi.fn(async () => {}),
+        }
+      }),
+    }
+    render(voiceComposer({
+      inputActions: { setDraft: vi.fn(), submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'hold-local-copy',
+      providers: { 'local-endpoint': provider },
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' })
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 9, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    expect(screen.getByRole('status').textContent).toContain('松开鼠标结束录音并转写')
+    expect(screen.getByRole('status').textContent).not.toContain('再次点击麦克风')
+
+    act(() => { callbacks?.onProgress?.({ phase: 'voice', message: '已检测到语音' }) })
+    expect(screen.getByRole('status').textContent).toContain('已检测到语音；松开鼠标结束录音并转写')
+    expect(screen.getByRole('status').textContent).not.toContain('再次点击麦克风')
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 9, isPrimary: true })
+  })
+
+  it.each([
+    ['microphone', 'Mozilla/5.0 (Macintosh)', '再次点击麦克风结束并转写'],
+    ['composer-hold', 'Mozilla/5.0 (Macintosh)', '松开鼠标结束录音并转写'],
+    ['keyboard-shortcut', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', '再按一次右 Command 结束录音并转写'],
+    ['keyboard-shortcut', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', '再按一次右 Control 结束录音并转写'],
+  ] as const)('maps the %s trigger to its local recording guidance', (trigger, userAgent, expected) => {
+    expect(localRecordingStopInstruction(trigger, userAgent)).toBe(expected)
+  })
+
+  it('does not start for a short press or partial selection and replaces a whole selection', () => {
+    updatePrefs({ composerHoldToTalkEnabled: true })
+    const setDraft = vi.fn()
+    render(voiceComposer({
+      inputActions: { setDraft, submit: vi.fn() },
+      input: { draft: '全部原文' },
+      sessionId: 'hold-selection',
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' }) as HTMLTextAreaElement
+    composer.value = '全部原文'
+
+    composer.setSelectionRange(1, 3)
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 2, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    expect(FakeRecognition.instances).toHaveLength(0)
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 2, isPrimary: true })
+
+    composer.setSelectionRange(0, composer.value.length)
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 3, isPrimary: true })
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 3, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    expect(FakeRecognition.instances).toHaveLength(0)
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 4, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.onstart?.() })
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 4, isPrimary: true })
+    act(() => { recognition?.finishWith('替换结果') })
+
+    expect(setDraft).toHaveBeenCalledWith('替换结果')
+  })
+
+  it('shows the hold prompt only when enabled and supports the contenteditable Composer', () => {
+    updatePrefs({ composerHoldToTalkEnabled: true })
+    const setDraft = vi.fn()
+    render(contentEditableVoiceComposer({
+      inputActions: { setDraft, submit: vi.fn() },
+      input: { draft: '' },
+      sessionId: 'hold-contenteditable',
+    }))
+    const composer = screen.getByRole('textbox', { name: COMPOSER_HOLD_TO_TALK_PROMPT })
+    expect(composer.getAttribute('data-placeholder')).toBe(COMPOSER_HOLD_TO_TALK_PROMPT)
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 5, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    const recognition = FakeRecognition.instances[0]
+    expect(composer.getAttribute('data-placeholder')).toBe(COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT)
+    expect(composer.getAttribute('aria-label')).toBe(COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT)
+    act(() => { recognition?.onstart?.() })
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 5, isPrimary: true })
+    expect(composer.getAttribute('data-placeholder')).toBe(COMPOSER_HOLD_TO_TALK_PROMPT)
+    act(() => { recognition?.finishWith('空白写入') })
+
+    expect(setDraft).toHaveBeenCalledWith('空白写入')
+  })
+
+  it('replaces a whole selection in the Alpha.3 contenteditable Composer', () => {
+    updatePrefs({ composerHoldToTalkEnabled: true })
+    const setDraft = vi.fn()
+    render(contentEditableVoiceComposer({
+      inputActions: { setDraft, submit: vi.fn() },
+      input: { draft: '全部原文' },
+      sessionId: 'hold-contenteditable-selection',
+    }))
+    const composer = screen.getByRole('textbox', { name: COMPOSER_HOLD_TO_TALK_PROMPT })
+    composer.textContent = '全部原文'
+    const range = document.createRange()
+    range.selectNodeContents(composer)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 7, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.onstart?.() })
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 7, isPrimary: true })
+    act(() => { recognition?.finishWith('替换结果') })
+
+    expect(setDraft).toHaveBeenCalledWith('替换结果')
+  })
+
+  it('does not overwrite Composer changes made while a hold recording is active', () => {
+    updatePrefs({ composerHoldToTalkEnabled: true })
+    const setDraft = vi.fn()
+    const props = {
+      inputActions: { setDraft, submit: vi.fn() },
+      sessionId: 'hold-draft-change',
+    }
+    const view = render(voiceComposer({ ...props, input: { draft: '录音前' } }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' }) as HTMLTextAreaElement
+    composer.value = '录音前'
+    composer.setSelectionRange(3, 3)
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 8, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.onstart?.() })
+    view.rerender(voiceComposer({ ...props, input: { draft: '用户新输入' } }))
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 8, isPrimary: true })
+    act(() => { recognition?.finishWith('语音结果') })
+
+    expect(setDraft).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('录音期间输入框内容发生变化')
+  })
+
+  it('keeps the selected draft unchanged when hold-to-talk polishing fails', async () => {
+    updatePrefs({
+      composerHoldToTalkEnabled: true,
+      modelPolishEnabled: true,
+      selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }),
+    })
+    const setDraft = vi.fn()
+    render(voiceComposer({
+      inputActions: { setDraft, submit: vi.fn() },
+      input: { draft: '保留原文' },
+      sessionId: 'hold-polish-failure',
+      polish: vi.fn(async () => { throw new Error('polish failed') }),
+    }))
+    const composer = screen.getByRole('textbox', { name: 'Composer' }) as HTMLTextAreaElement
+    composer.value = '保留原文'
+    composer.select()
+
+    fireEvent.pointerDown(composer, { button: 0, pointerId: 6, isPrimary: true })
+    act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.onstart?.() })
+    fireEvent.pointerUp(composer, { button: 0, pointerId: 6, isPrimary: true })
+    await act(async () => {
+      recognition?.finishWith('低质量原始转写')
+      await Promise.resolve()
+    })
+
+    expect(setDraft).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('输入框内容保持不变')
   })
 
   it('uses right Command on macOS', () => {

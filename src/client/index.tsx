@@ -95,6 +95,12 @@ interface VoiceInputProps {
   readonly providers?: Partial<Record<'web-speech' | 'local-endpoint', AsrProvider>>
 }
 
+interface VoiceInputSlotProps extends Omit<VoiceInputProps, 'input'> {
+  /** Alpha.2 supplied a point-in-time value; Alpha.3+ supplies a selector Hook. */
+  readonly input?: VoiceInputProps['input']
+  readonly useInput?: <Selected>(selector: (state: VoiceInputProps['input']) => Selected) => Selected
+}
+
 interface PolishClientRequest {
   readonly sessionId: string
   readonly provider: string
@@ -139,6 +145,18 @@ function rightModifierCode(userAgent: string): 'MetaRight' | 'ControlRight' {
   return /\bMacintosh\b|\bMac OS X\b/i.test(userAgent) ? 'MetaRight' : 'ControlRight'
 }
 
+export type VoiceInputTrigger = 'microphone' | 'composer-hold' | 'keyboard-shortcut'
+
+export function localRecordingStopInstruction(trigger: VoiceInputTrigger, userAgent: string): string {
+  if (trigger === 'composer-hold') return '松开鼠标结束录音并转写'
+  if (trigger === 'keyboard-shortcut') {
+    return rightModifierCode(userAgent) === 'MetaRight'
+      ? '再按一次右 Command 结束录音并转写'
+      : '再按一次右 Control 结束录音并转写'
+  }
+  return '再次点击麦克风结束并转写'
+}
+
 function contextTermsKey(
   request: ContextTermsRequest,
   composerPhase: VoiceInputProps['input']['phase'],
@@ -156,6 +174,65 @@ const WEB_SPEECH_PROVIDER = createWebSpeechProvider()
 export const DICTATION_WARNING_MS = 8 * 60 * 1_000
 export const DICTATION_MAX_DURATION_MS = 9 * 60 * 1_000
 export const MEANINGFUL_TRANSCRIPTION_STAGE_MS = 3_000
+export const COMPOSER_HOLD_TO_TALK_MS = 500
+export const COMPOSER_HOLD_TO_TALK_PROMPT = '按住鼠标 语音输入文字'
+export const COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT = '松开鼠标结束录音，完成后写入输入框'
+
+type ComposerTextbox = HTMLTextAreaElement | HTMLElement
+
+interface ComposerInsertion {
+  readonly draft: string
+  readonly start: number
+  readonly end: number
+}
+
+function isComposerTextbox(element: Element): element is ComposerTextbox {
+  return element instanceof HTMLTextAreaElement
+    || (element instanceof HTMLElement
+      && element.getAttribute('contenteditable') === 'true'
+      && element.getAttribute('role') === 'textbox')
+}
+
+function composerTextbox(card: Element): ComposerTextbox | undefined {
+  const candidate = card.querySelector('textarea, [contenteditable="true"][role="textbox"]')
+  return candidate !== null && isComposerTextbox(candidate) ? candidate : undefined
+}
+
+function rangeOffset(root: HTMLElement, node: Node, offset: number): number | undefined {
+  if (node !== root && !root.contains(node)) return undefined
+  try {
+    const probe = document.createRange()
+    probe.selectNodeContents(root)
+    probe.setEnd(node, offset)
+    return probe.toString().length
+  } catch {
+    return undefined
+  }
+}
+
+/** Capture the existing Composer caret or whole-draft selection before pointerdown changes it. */
+export function captureComposerInsertion(target: ComposerTextbox, draft: string): ComposerInsertion | undefined {
+  let start: number
+  let end: number
+  if (target instanceof HTMLTextAreaElement) {
+    start = target.selectionStart
+    end = target.selectionEnd
+  } else {
+    const selection = window.getSelection()
+    if (selection === null || selection.rangeCount === 0) {
+      return draft === '' ? { draft, start: 0, end: 0 } : undefined
+    }
+    const range = selection.getRangeAt(0)
+    const rangeStart = rangeOffset(target, range.startContainer, range.startOffset)
+    const rangeEnd = rangeOffset(target, range.endContainer, range.endOffset)
+    if (rangeStart === undefined || rangeEnd === undefined) return undefined
+    start = rangeStart
+    end = rangeEnd
+  }
+  if (start < 0 || end < start || end > draft.length) return undefined
+  if (start !== end && (start !== 0 || end !== draft.length)) return undefined
+  return { draft, start, end }
+}
 
 const COUNTDOWN_ANNOUNCEMENT_SECONDS = new Set([60, 30, 10, 5, 4, 3, 2, 1])
 
@@ -297,8 +374,8 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.input.right',
     id: 'dictate-recorder',
     order: 10,
-  }, props => <VoiceInputButton
-    {...props as VoiceInputProps}
+  }, props => <VoiceInputSlot
+    {...props as VoiceInputSlotProps}
     polish={polish}
     loadContextTerms={loadContextTerms}
     checkLocalEndpoint={testEndpoint}
@@ -317,6 +394,19 @@ export function apply(ctx: ClientContext): void {
   />))
 }
 
+function VoiceInputSlot({ input: legacyInput, useInput, ...props }: VoiceInputSlotProps) {
+  if (useInput !== undefined) return <VoiceInputHookSlot {...props} useInput={useInput} />
+  if (legacyInput === undefined) return null
+  return <VoiceInputButton {...props} input={legacyInput} />
+}
+
+function VoiceInputHookSlot({ useInput, ...props }: Omit<VoiceInputSlotProps, 'input' | 'useInput'> & {
+  readonly useInput: NonNullable<VoiceInputSlotProps['useInput']>
+}) {
+  const input = useInput(state => state)
+  return <VoiceInputButton {...props} input={input} />
+}
+
 /** Manual click-to-start, click-to-stop dictation control. */
 export function VoiceInputButton({
   inputActions,
@@ -329,6 +419,7 @@ export function VoiceInputButton({
 }: VoiceInputProps) {
   const [recording, setRecording] = useState(false)
   const [preparing, setPreparing] = useState(false)
+  const [holdActive, setHoldActive] = useState(false)
   const prefs = useSyncExternalStore(subscribePrefs, loadPrefs, () => loadPrefs())
   const sessionRef = useRef<AsrProviderSession>()
   const activeProviderRef = useRef<'web-speech' | 'local-endpoint'>()
@@ -357,7 +448,9 @@ export function VoiceInputButton({
     readonly promise: Promise<readonly ContextTerm[]>
   }>()
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const toggleRef = useRef<() => void>(() => {})
+  const toggleRef = useRef<(trigger?: VoiceInputTrigger) => void>(() => {})
+  const startTriggerRef = useRef<VoiceInputTrigger>('microphone')
+  const holdCompletionRef = useRef<ComposerInsertion>()
   draftRef.current = input.draft
   actionsRef.current = inputActions
 
@@ -605,6 +698,8 @@ export function VoiceInputButton({
     finalizingStartedAtRef.current = undefined
     dictationStartedAtRef.current = undefined
     recordingElapsedMsRef.current = null
+    holdCompletionRef.current = undefined
+    setHoldActive(false)
     resetTranscription(sessionId)
   }, [sessionId])
 
@@ -646,13 +741,28 @@ export function VoiceInputButton({
     shouldLoadContextTerms,
   ])
 
-  const insertTranscript = (transcript: string, allowAutomaticSend: boolean): void => {
+  const insertTranscript = (
+    transcript: string,
+    allowAutomaticSend: boolean,
+    insertion?: ComposerInsertion,
+  ): boolean => {
+    if (insertion !== undefined) {
+      if (draftRef.current !== insertion.draft) {
+        showTransientMessage('转写未写入', '录音期间输入框内容发生变化，请重试', true)
+        return false
+      }
+      const nextDraft = `${insertion.draft.slice(0, insertion.start)}${transcript}${insertion.draft.slice(insertion.end)}`
+      draftRef.current = nextDraft
+      actionsRef.current.setDraft(nextDraft)
+      return true
+    }
     const current = draftRef.current.trim()
     const prefix = current === '' ? '' : `${draftRef.current} `
     const nextDraft = `${prefix}${transcript}`
     draftRef.current = nextDraft
     actionsRef.current.setDraft(nextDraft)
     if (allowAutomaticSend) actionsRef.current.submit()
+    return true
   }
 
   const termsForPolish = (selected: ModelReference): readonly ContextTerm[] => {
@@ -667,11 +777,25 @@ export function VoiceInputButton({
     return []
   }
 
-  const finishTranscript = async (transcript: string, allowAutomaticSend: boolean): Promise<void> => {
+  const finishTranscript = async (
+    transcript: string,
+    allowAutomaticSend: boolean,
+    insertion?: ComposerInsertion,
+  ): Promise<void> => {
     const selected = selectedModel
+    if (insertion !== undefined && prefs.modelPolishEnabled
+      && (polish === undefined || selected === undefined)) {
+      finishFinalizingStage(false)
+      showTransientMessage(
+        '润色未完成',
+        selected === undefined ? '请选择润色模型；输入框内容保持不变' : '润色服务不可用；输入框内容保持不变',
+        true,
+      )
+      return
+    }
     if (!prefs.modelPolishEnabled || polish === undefined || selected === undefined) {
       finishFinalizingStage(false)
-      insertTranscript(transcript, allowAutomaticSend)
+      if (!insertTranscript(transcript, allowAutomaticSend, insertion)) return
       const polishUnavailable = prefs.modelPolishEnabled && selected === undefined
       showTransientMessage(
         polishUnavailable ? '润色未完成' : '已转写完成',
@@ -712,13 +836,17 @@ export function VoiceInputButton({
         terms,
       }, controller.signal)
       if (controller.signal.aborted) return
-      insertTranscript(text, allowAutomaticSend)
+      if (!insertTranscript(text, allowAutomaticSend, insertion)) return
       showTransientMessage(
         '已润色完成',
         allowAutomaticSend ? '最终结果已直接发送' : '最终结果已写入输入框',
       )
     } catch {
       if (controller.signal.aborted) return
+      if (insertion !== undefined) {
+        showTransientMessage('润色未完成', '输入框内容保持不变，请重试', true)
+        return
+      }
       insertTranscript(transcript, allowAutomaticSend)
       showTransientMessage(
         '润色未完成',
@@ -730,7 +858,7 @@ export function VoiceInputButton({
     }
   }
 
-  const toggle = (): void => {
+  const toggle = (trigger: VoiceInputTrigger = 'microphone'): void => {
     const activeSession = sessionRef.current
     if (activeSession !== undefined) {
       if (finalizingRef.current) {
@@ -776,6 +904,8 @@ export function VoiceInputButton({
       if (!retryAfterPreflightError) return
     }
     if (!supported) {
+      holdCompletionRef.current = undefined
+      setHoldActive(false)
       clearMessageTimer()
       resetTranscription(sessionId)
       recordingElapsedMsRef.current = null
@@ -790,6 +920,7 @@ export function VoiceInputButton({
       return
     }
 
+    startTriggerRef.current = trigger
     clearTermsDebounce()
     polishAbortRef.current?.abort()
     polishAbortRef.current = undefined
@@ -862,18 +993,22 @@ export function VoiceInputButton({
         setPreparing(false)
         setRecording(true)
         startDictationTimers(localMode)
+        const localStopInstruction = localRecordingStopInstruction(
+          startTriggerRef.current,
+          window.navigator.userAgent,
+        )
         updateTranscription(sessionId, {
           phase: 'listening',
           finalText: '',
           interimText: '',
           status: localMode ? '正在录音中' : '正在听写中',
           hint: localMode
-            ? '再次点击麦克风结束并转写'
+            ? localStopInstruction
             : fallbackNotice
               ? '本地语音识别暂不可用，本次已改用浏览器语音识别；请开始说话…'
               : '请开始说话…',
           announcement: localMode
-            ? '正在录音中。再次点击麦克风结束并转写'
+            ? `正在录音中。${localStopInstruction}`
             : fallbackNotice
               ? '正在听写中。本次已改用浏览器语音识别，请开始说话'
               : '正在听写中。请开始说话',
@@ -938,10 +1073,14 @@ export function VoiceInputButton({
         if (countdownActiveRef.current && !finalizingRef.current) return
         if (progress.phase === 'voice') {
           if (!localMode || finalizingRef.current) return
+          const localStopInstruction = localRecordingStopInstruction(
+            startTriggerRef.current,
+            window.navigator.userAgent,
+          )
           updateTranscription(sessionId, {
             phase: 'listening',
             status: '正在录音中',
-            hint: '已检测到语音；再次点击麦克风结束并转写',
+            hint: `已检测到语音；${localStopInstruction}`,
             announcement: '正在录音中。已检测到语音',
             action: null,
           })
@@ -975,13 +1114,17 @@ export function VoiceInputButton({
         startAbortRef.current = undefined
         setRecording(false)
         setPreparing(false)
-        const allowAutomaticSend = reason === 'stop' && finalizingRef.current
+        setHoldActive(false)
+        const insertion = holdCompletionRef.current
+        holdCompletionRef.current = undefined
+        const allowAutomaticSend = insertion === undefined
+          && reason === 'stop' && finalizingRef.current
           && !automaticStopRef.current && prefs.autoSendEnabled
         finalizingRef.current = false
         automaticStopRef.current = false
         const transcript = currentFinalText().trim()
         if (transcript !== '') {
-          void finishTranscript(transcript, allowAutomaticSend)
+          void finishTranscript(transcript, allowAutomaticSend, insertion)
         } else if (!failedRef.current && reason !== 'abort') {
           showTransientMessage('转写未完成', '没有识别到语音，请重试', true)
         } else if (reason === 'abort' && !failedRef.current) {
@@ -1006,6 +1149,8 @@ export function VoiceInputButton({
     }
     const rejectSession = (error: unknown): void => {
       clearPermissionStatusTimer()
+      holdCompletionRef.current = undefined
+      setHoldActive(false)
       startAbortRef.current = undefined
       activeProviderRef.current = undefined
       setRecording(false)
@@ -1100,6 +1245,145 @@ export function VoiceInputButton({
   toggleRef.current = toggle
 
   useEffect(() => {
+    if (!prefs.composerHoldToTalkEnabled) return
+    const card = buttonRef.current?.closest('[data-composer-card]')
+    if (card === null || card === undefined) return
+    const target = composerTextbox(card)
+    if (target === undefined) return
+    const previousPlaceholder = target.getAttribute('placeholder')
+    const previousDataPlaceholder = target.getAttribute('data-placeholder')
+    const previousAriaLabel = target.getAttribute('aria-label')
+    const placeholder = card.querySelector<HTMLElement>('[data-composer-placeholder]')
+    const previousPlaceholderText = placeholder?.textContent ?? null
+    const holdPrompt = holdActive ? COMPOSER_HOLD_TO_TALK_ACTIVE_PROMPT : COMPOSER_HOLD_TO_TALK_PROMPT
+    if (target instanceof HTMLTextAreaElement) {
+      target.placeholder = holdPrompt
+    } else {
+      target.setAttribute('data-placeholder', holdPrompt)
+      target.setAttribute('aria-label', holdPrompt)
+      if (placeholder !== null) placeholder.textContent = holdPrompt
+    }
+    return () => {
+      const restore = (name: string, value: string | null): void => {
+        if (value === null) target.removeAttribute(name)
+        else target.setAttribute(name, value)
+      }
+      if (target.getAttribute('placeholder') === holdPrompt) {
+        restore('placeholder', previousPlaceholder)
+      }
+      if (target.getAttribute('data-placeholder') === holdPrompt) {
+        restore('data-placeholder', previousDataPlaceholder)
+      }
+      if (target.getAttribute('aria-label') === holdPrompt) {
+        restore('aria-label', previousAriaLabel)
+      }
+      if (placeholder?.textContent === holdPrompt) {
+        placeholder.textContent = previousPlaceholderText
+      }
+    }
+  }, [holdActive, input.draft, prefs.composerHoldToTalkEnabled])
+
+  useEffect(() => {
+    if (!prefs.composerHoldToTalkEnabled) return
+    const card = buttonRef.current?.closest('[data-composer-card]')
+    if (card === null || card === undefined) return
+    const target = composerTextbox(card)
+    if (target === undefined) return
+    let timer: number | undefined
+    let candidate: {
+      readonly pointerId: number
+      readonly x: number
+      readonly y: number
+      readonly insertion: ComposerInsertion
+      started: boolean
+    } | undefined
+    const clearCandidate = (): void => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = undefined
+      candidate = undefined
+    }
+    const cancelActiveHold = (): void => {
+      const current = candidate
+      clearCandidate()
+      if (current?.started !== true) return
+      holdCompletionRef.current = undefined
+      setHoldActive(false)
+      startAbortRef.current?.abort()
+      void sessionRef.current?.abort()
+    }
+    const onPointerDown: EventListener = (rawEvent): void => {
+      const event = rawEvent as PointerEvent
+      const button = event.button ?? 0
+      const pointerId = event.pointerId ?? 0
+      if (button !== 0 || event.isPrimary === false || candidate !== undefined
+        || sessionRef.current !== undefined || startAbortRef.current !== undefined
+        || finalizingRef.current) return
+      const insertion = captureComposerInsertion(target, draftRef.current)
+      if (insertion === undefined) return
+      if (insertion.start === 0 && insertion.end === insertion.draft.length && insertion.start !== insertion.end) {
+        event.preventDefault()
+      }
+      candidate = {
+        pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        insertion,
+        started: false,
+      }
+      try { target.setPointerCapture(pointerId) } catch { /* Pointer capture is optional in older hosts. */ }
+      timer = window.setTimeout(() => {
+        timer = undefined
+        if (candidate === undefined) return
+        if (sessionRef.current !== undefined || startAbortRef.current !== undefined
+          || finalizingRef.current) {
+          clearCandidate()
+          return
+        }
+        candidate.started = true
+        holdCompletionRef.current = candidate.insertion
+        setHoldActive(true)
+        toggleRef.current('composer-hold')
+        if (sessionRef.current === undefined && startAbortRef.current === undefined) {
+          holdCompletionRef.current = undefined
+          setHoldActive(false)
+        }
+      }, COMPOSER_HOLD_TO_TALK_MS)
+    }
+    const onPointerMove: EventListener = (rawEvent): void => {
+      const event = rawEvent as PointerEvent
+      if (candidate === undefined || candidate.started) return
+      if (Math.hypot(event.clientX - candidate.x, event.clientY - candidate.y) <= 8) return
+      clearCandidate()
+    }
+    const onPointerUp: EventListener = (rawEvent): void => {
+      const event = rawEvent as PointerEvent
+      if (candidate === undefined || (event.pointerId ?? 0) !== candidate.pointerId) return
+      const current = candidate
+      clearCandidate()
+      if (!current.started) return
+      setHoldActive(false)
+      if (sessionRef.current === undefined && startAbortRef.current === undefined) {
+        holdCompletionRef.current = undefined
+        return
+      }
+      toggleRef.current('composer-hold')
+    }
+    target.addEventListener('pointerdown', onPointerDown)
+    target.addEventListener('pointermove', onPointerMove)
+    target.addEventListener('pointerup', onPointerUp)
+    target.addEventListener('pointercancel', cancelActiveHold)
+    window.addEventListener('blur', cancelActiveHold)
+    return () => {
+      cancelActiveHold()
+      target.removeEventListener('pointerdown', onPointerDown)
+      target.removeEventListener('pointermove', onPointerMove)
+      target.removeEventListener('pointerup', onPointerUp)
+      target.removeEventListener('pointercancel', cancelActiveHold)
+      window.removeEventListener('blur', cancelActiveHold)
+    }
+  }, [prefs.composerHoldToTalkEnabled])
+
+  useEffect(() => {
     if (!prefs.composerShortcutEnabled) return
     const card = buttonRef.current?.closest('[data-composer-card]')
     if (card === null || card === undefined) return
@@ -1139,7 +1423,7 @@ export function VoiceInputButton({
       if (event.code !== modifierCode) return
       const shouldToggle = armed && !chorded && !event.isComposing && ownsFocusedComposer(event.target)
       reset()
-      if (shouldToggle) toggleRef.current()
+      if (shouldToggle) toggleRef.current('keyboard-shortcut')
     }
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
@@ -1167,7 +1451,7 @@ export function VoiceInputButton({
           : prefs.transcriptionProvider === 'web-speech'
             ? '当前浏览器不支持语音识别，请使用 Chrome 或 Edge'
             : '当前浏览器不支持本地录音，请使用最新版 Chrome 或 Edge'}
-        onClick={toggle}
+        onClick={() => { toggle('microphone') }}
         style={{
           width: 28,
           height: 28,
