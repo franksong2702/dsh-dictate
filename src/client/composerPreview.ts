@@ -63,7 +63,9 @@ export function mountComposerPreview(
     if (disposed) return
     view.style.left = `${target.offsetLeft}px`
     view.style.top = `${target.offsetTop}px`
-    view.style.width = `${target.offsetWidth}px`
+    // offsetWidth rounds up fractional layouts, creating an outer horizontal
+    // scrollbar even for a short line (e.g. 789.59375 px becomes 790 px).
+    view.style.width = `${target.getBoundingClientRect().width}px`
     const maxHeight = Number.parseFloat(computed.maxHeight)
     const desired = Math.min(Math.max(target.offsetHeight, view.scrollHeight),
       Number.isFinite(maxHeight) ? maxHeight : 320)
