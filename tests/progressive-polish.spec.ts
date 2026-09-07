@@ -42,6 +42,86 @@ describe('progressive transcript polish', () => {
     expect(run.metrics.reused).toBe('in-flight')
   })
 
+  it('starts polishing an unchanged full interim snapshot before recognition marks it final', async () => {
+    const polish = vi.fn(async () => cleaned)
+    const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
+    // Web Speech can leave the whole utterance interim until stop/onend.
+    run.update('', raw)
+    await vi.advanceTimersByTimeAsync(900)
+    expect(polish).toHaveBeenCalledWith(raw, expect.any(AbortSignal))
+    expect(await run.finish(raw)).toBe(cleaned)
+    expect(polish).toHaveBeenCalledTimes(1)
+  })
+
+  it('overlaps immediate stop recognition drain with one full-snapshot model request', async () => {
+    vi.setSystemTime(0)
+    const polish = vi.fn((text: string) => new Promise<string>(resolve => setTimeout(() => resolve(text), 800)))
+    const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
+    run.update('', raw)
+    run.prepareToStop()
+    run.prepareToStop()
+    await vi.advanceTimersByTimeAsync(500) // recognition stop -> final result/onend
+    run.update(raw, '')
+    let done = -1
+    const result = run.finish(raw).then(text => { done = Date.now(); return text })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(await result).toBe(raw)
+    expect(done).toBe(800) // old serial path: 500 + 800 = 1300
+    expect(polish).toHaveBeenCalledTimes(1)
+    expect(run.metrics.stopCalls).toBe(1)
+    expect(run.metrics.reused).toBe('in-flight')
+  })
+
+  it('never commits a speculative interim spelling when final recognition corrects it', async () => {
+    const polish = vi.fn(async (text: string) => text)
+    const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
+    run.update('', '预算二十万周四开会')
+    await vi.advanceTimersByTimeAsync(900)
+    run.prepareToStop()
+    expect(await run.finish('预算十八万周五开会')).toBe('预算十八万周五开会')
+    expect(polish.mock.calls.map(call => call[0])).toEqual(['预算二十万周四开会', '预算十八万周五开会'])
+    expect(run.metrics.reused).toBe('none')
+  })
+
+  it('does not restart the debounce when identical interim words become recognition-final', async () => {
+    const polish = vi.fn(async (text: string) => text)
+    const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
+    run.update('', raw)
+    await vi.advanceTimersByTimeAsync(800)
+    run.update(raw, '')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(polish).toHaveBeenCalledTimes(1)
+    run.cancel()
+  })
+
+  it('keeps stop speculation within its budget while allowing the mandatory final pass', async () => {
+    const polish = vi.fn(async (text: string) => text)
+    const run = new ProgressivePolish({ polish, preview: vi.fn(), join, maxBackgroundCalls: 0 })
+    run.update('', raw)
+    run.prepareToStop()
+    expect(polish).not.toHaveBeenCalled()
+    expect(await run.finish(raw)).toBe(raw)
+    expect(run.metrics.finalCalls).toBe(1)
+  })
+
+  it('replaces a stale pending snapshot once at stop and ignores its late completion', async () => {
+    const old = deferred<string>()
+    const current = deferred<string>()
+    const polish = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+    const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
+    run.update('', raw)
+    await vi.advanceTimersByTimeAsync(900)
+    run.update('', `${raw}第三条补充文档`)
+    run.prepareToStop()
+    expect(polish.mock.calls[0]?.[1].aborted).toBe(true)
+    const result = run.finish(`${raw}第三条补充文档`)
+    old.resolve('迟到的旧版本')
+    current.resolve('修复登录，补测试和文档。')
+    expect(await result).toBe('修复登录，补测试和文档。')
+    expect(polish).toHaveBeenCalledTimes(2)
+    expect(run.metrics.finalCalls).toBe(0)
+  })
+
   it('uses the original full words for late corrections, never the earlier polished text', async () => {
     const polish = vi.fn(async (text: string) => text === raw ? cleaned : '只修改登录页面，不补测试。')
     const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
@@ -57,8 +137,9 @@ describe('progressive transcript polish', () => {
   it('keeps trailing interim words raw and replaces a revised prefix without duplicate text', async () => {
     const preview = vi.fn()
     const run = new ProgressivePolish({ polish: async () => cleaned, preview, join })
-    run.update(raw, '还有')
+    run.update(raw, '')
     await vi.advanceTimersByTimeAsync(900)
+    run.update(raw, '还有')
     expect(preview).toHaveBeenLastCalledWith(`${cleaned}还有`)
     run.update('首先修复退出页面', '还有')
     expect(preview).toHaveBeenLastCalledWith('首先修复退出页面还有')

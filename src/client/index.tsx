@@ -460,6 +460,9 @@ export function VoiceInputButton({
     readonly scheduler?: ProgressivePolish
     preview?: ComposerPreview
     editing?: boolean
+    stoppedAt?: number
+    recognitionEndedAt?: number
+    prepareToStop: () => void
     cancel: () => void
   }>()
   draftRef.current = input.draft
@@ -655,6 +658,7 @@ export function VoiceInputButton({
           : '正在确认中。录音时长 9 分钟，正在确认识别结果',
         action: null,
       })
+      webRunRef.current?.prepareToStop()
       void activeSession.stop()
     }, DICTATION_MAX_DURATION_MS)
   }
@@ -914,6 +918,7 @@ export function VoiceInputButton({
           : '正在确认中。正在确认识别结果',
         action: null,
       })
+      webRunRef.current?.prepareToStop()
       void activeSession.stop()
       return
     }
@@ -1021,6 +1026,11 @@ export function VoiceInputButton({
       }
       webRun = {
         draft, insertion, controller, cancel,
+        prepareToStop: () => {
+          if (webRun === undefined || webRunRef.current !== webRun || webRun.stoppedAt !== undefined) return
+          webRun.stoppedAt = Date.now()
+          webRun.scheduler?.prepareToStop()
+        },
         scheduler: !prefs.modelPolishEnabled || route === undefined || polish === undefined ? undefined
           : new ProgressivePolish({
             polish: (raw, signal) => polish({ sessionId, ...route, transcript: raw,
@@ -1081,6 +1091,18 @@ export function VoiceInputButton({
       }
       const inserted = insertTranscript(text, false, run.insertion)
       if (!inserted) return
+      if (run.stoppedAt !== undefined) {
+        const completedAt = Date.now()
+        // One content-free diagnostic per completed recording; never audio,
+        // transcript, session identity, credentials, or conversation context.
+        console.info('[dsh-dictate:performance]', JSON.stringify({
+          stopToFinalMs: completedAt - run.stoppedAt,
+          recognitionDrainMs: (run.recognitionEndedAt ?? completedAt) - run.stoppedAt,
+          postRecognitionWaitMs: completedAt - (run.recognitionEndedAt ?? completedAt),
+          polishFailed,
+          ...(run.scheduler?.metrics ?? {}),
+        }))
+      }
       // Only finalized success can exercise the existing explicit-stop permission.
       if (allowAutomaticSend && !polishFailed) actionsRef.current.submit()
       showTransientMessage(polishFailed ? '润色未完成' : run.scheduler ? '已润色完成' : '已转写完成',
@@ -1196,6 +1218,7 @@ export function VoiceInputButton({
       onStatus: (status) => {
         if (controller.signal.aborted || ended) return
         if (status !== 'stopping') return
+        webRun?.prepareToStop()
         setRecording(false)
         setPreparing(localMode)
         updateTranscription(sessionId, {
@@ -1262,6 +1285,7 @@ export function VoiceInputButton({
       onEnd: (reason) => {
         if (controller.signal.aborted || ended) return
         if (webRun !== undefined && reason === 'abort') { webRun.cancel(); return }
+        if (webRun !== undefined) webRun.recognitionEndedAt = Date.now()
         freezeRecordingClock()
         clearPermissionStatusTimer()
         ended = true

@@ -2197,6 +2197,33 @@ describe('Contextual Dictation browser plugin', () => {
     expect(document.querySelector('[data-dictate-composer-preview]')).toBeNull()
   })
 
+  it('starts the full interim polish on stop before recognition onend and reports content-free phase timings', async () => {
+    updatePrefs({ modelPolishEnabled: true, selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }) })
+    const timing = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const polish = vi.fn(() => new Promise<string>(resolve => setTimeout(() => resolve('周五下午三点开会。'), 800)))
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    render(voiceComposer({ inputActions: { setDraft, submit }, input: { draft: '' }, sessionId: 'stop-overlap', polish }))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.emitResults({ text: '周五下午三点开会', final: false }) })
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    expect(polish).toHaveBeenCalledTimes(1)
+    expect(setDraft).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); recognition?.finishWith('周五下午三点开会') })
+    expect(setDraft).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(setDraft).toHaveBeenCalledExactlyOnceWith('周五下午三点开会。')
+    expect(polish).toHaveBeenCalledTimes(1)
+    expect(submit).not.toHaveBeenCalled()
+    const report = timing.mock.calls.find(call => call[0] === '[dsh-dictate:performance]')?.[1]
+    expect(JSON.parse(report)).toMatchObject({ stopToFinalMs: 800, recognitionDrainMs: 500,
+      postRecognitionWaitMs: 300, stopCalls: 1, finalCalls: 0, reused: 'in-flight' })
+    expect(report).not.toContain('周五')
+    expect(report).not.toContain('stop-overlap')
+    timing.mockRestore()
+  })
+
   it('preserves an external draft change while speculative polishing is pending', async () => {
     updatePrefs({ modelPolishEnabled: true, selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }) })
     let resolve!: (text: string) => void
