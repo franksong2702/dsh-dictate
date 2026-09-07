@@ -1,10 +1,11 @@
 /** Speculative full-transcript polishing. Raw recognition is always authoritative. */
 /**
- * Short enough to start during a natural breath, while the 4-second spacing and
+ * Short enough to start during a natural breath, while request spacing and
  * per-recording budgets below keep continuous recognition from becoming one RPC
  * per hypothesis.
  */
 export const DEFAULT_PROGRESSIVE_PAUSE_MS = 350
+export const DEFAULT_PROGRESSIVE_INTERVAL_MS = 2000
 
 export interface ProgressivePolishOptions {
   readonly polish: (raw: string, signal: AbortSignal) => Promise<string>
@@ -37,6 +38,7 @@ export class ProgressivePolish {
   private interim = ''
   private timer: ReturnType<typeof setTimeout> | undefined
   private lastStarted = -Infinity
+  private changedAt = -Infinity
   private lastAttempt = ''
   private cancelled = false
   private finishing = false
@@ -54,6 +56,7 @@ export class ProgressivePolish {
     this.interim = interim
     this.render()
     if (previous === this.snapshot()) return
+    this.changedAt = Date.now()
     this.clearTimer()
     this.schedule()
   }
@@ -71,11 +74,14 @@ export class ProgressivePolish {
   }
 
   private schedule(): void {
-    if (this.cancelled || this.finishing || this.stopping) return
+    if (this.cancelled || this.finishing || this.stopping || this.pending !== undefined) return
     const snapshot = this.snapshot()
     if (snapshot.length < 8 || snapshot === this.lastAttempt) return
-    const wait = Math.max(this.options.pauseMs ?? DEFAULT_PROGRESSIVE_PAUSE_MS,
-      this.lastStarted + (this.options.intervalMs ?? 4000) - Date.now())
+    // Count quiet time from the last text change, including time spent waiting
+    // for the previous request. Never restart that wait on model completion.
+    const wait = Math.max(0,
+      this.changedAt + (this.options.pauseMs ?? DEFAULT_PROGRESSIVE_PAUSE_MS) - Date.now(),
+      this.lastStarted + (this.options.intervalMs ?? DEFAULT_PROGRESSIVE_INTERVAL_MS) - Date.now())
     this.timer = setTimeout(() => {
       this.timer = undefined
       this.startSpeculative(false)
