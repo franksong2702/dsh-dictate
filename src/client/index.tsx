@@ -17,6 +17,8 @@ import {
   createLocalEndpointProvider,
 } from './localEndpointProvider.ts'
 import { createWebSpeechProvider } from './webSpeechProvider.ts'
+import { ProgressivePolish } from './progressivePolish.ts'
+import { mountComposerPreview, type ComposerPreview } from './composerPreview.ts'
 import {
   asrProviderError,
   type AsrContextTerm,
@@ -451,6 +453,15 @@ export function VoiceInputButton({
   const toggleRef = useRef<(trigger?: VoiceInputTrigger) => void>(() => {})
   const startTriggerRef = useRef<VoiceInputTrigger>('microphone')
   const holdCompletionRef = useRef<ComposerInsertion>()
+  const webRunRef = useRef<{
+    readonly draft: string
+    readonly insertion?: ComposerInsertion
+    readonly controller: AbortController
+    readonly scheduler?: ProgressivePolish
+    preview?: ComposerPreview
+    editing?: boolean
+    cancel: () => void
+  }>()
   draftRef.current = input.draft
   actionsRef.current = inputActions
 
@@ -678,6 +689,7 @@ export function VoiceInputButton({
   }
 
   useEffect(() => () => {
+    webRunRef.current?.cancel()
     clearMessageTimer()
     clearPermissionStatusTimer()
     clearDictationTimers()
@@ -702,6 +714,15 @@ export function VoiceInputButton({
     setHoldActive(false)
     resetTranscription(sessionId)
   }, [sessionId])
+
+  useEffect(() => {
+    const run = webRunRef.current
+    if (run !== undefined && (input.draft !== run.draft
+      || input.phase !== undefined && input.phase !== 'plain')) {
+      run.cancel()
+      showTransientMessage('语音输入已结束', '录音期间输入框内容发生变化，已保留修改', true)
+    }
+  }, [input.draft, input.phase])
 
   useEffect(() => {
     clearTermsDebounce()
@@ -859,6 +880,10 @@ export function VoiceInputButton({
   }
 
   const toggle = (trigger: VoiceInputTrigger = 'microphone'): void => {
+    if (webRunRef.current !== undefined && sessionRef.current === undefined) {
+      webRunRef.current.cancel()
+      return
+    }
     const activeSession = sessionRef.current
     if (activeSession !== undefined) {
       if (finalizingRef.current) {
@@ -960,6 +985,109 @@ export function VoiceInputButton({
     let fallbackNotice = false
     const finalSegments: string[] = []
     const currentFinalText = (): string => joinRecognitionSegments(finalSegments, prefs.lang)
+    let snapshotSeen = false
+    let interimText = ''
+    let webRun: typeof webRunRef.current
+    const ensureWebRun = (): void => {
+      if (localMode || webRun !== undefined) return
+      const card = buttonRef.current?.closest('[data-composer-card]')
+      const target = card == null ? undefined : composerTextbox(card)
+      const draft = draftRef.current
+      const insertion = holdCompletionRef.current ?? (target === undefined ? undefined
+        : captureComposerInsertion(target, draft) ?? { draft, start: draft.length, end: draft.length })
+      const route = selectedModel
+      const renderPreview = (text: string): void => {
+        if (webRun === undefined || webRunRef.current !== webRun || controller.signal.aborted) return
+        webRun.preview?.update(text)
+      }
+      const cancel = (): void => {
+        if (webRun === undefined || webRunRef.current !== webRun) return
+        webRunRef.current = undefined
+        ended = true
+        controller.abort()
+        webRun.scheduler?.cancel()
+        webRun.preview?.dispose()
+        void sessionRef.current?.abort()
+        sessionRef.current = undefined
+        startAbortRef.current = undefined
+        activeProviderRef.current = undefined
+        holdCompletionRef.current = undefined
+        finalizingRef.current = false
+        clearDictationTimers()
+        setRecording(false)
+        setPreparing(false)
+        setHoldActive(false)
+        resetTranscription(sessionId)
+      }
+      webRun = {
+        draft, insertion, controller, cancel,
+        scheduler: !prefs.modelPolishEnabled || route === undefined || polish === undefined ? undefined
+          : new ProgressivePolish({
+            polish: (raw, signal) => polish({ sessionId, ...route, transcript: raw,
+              terms: contextTermsRef.current }, signal),
+            join: parts => joinRecognitionSegments(parts, prefs.lang),
+            preview: renderPreview,
+          }),
+      }
+      webRunRef.current = webRun
+      if (target !== undefined && insertion !== undefined) {
+        webRun.preview = mountComposerPreview(target, insertion, text => {
+          if (webRunRef.current !== webRun || draftRef.current !== draft) { cancel(); return }
+          cancel()
+          draftRef.current = text
+          actionsRef.current.setDraft(text)
+          showTransientMessage('已保留修改', '语音输入已结束')
+        }, cancel, () => {
+          if (webRun === undefined || webRunRef.current !== webRun) return
+          webRun.editing = true
+          controller.abort()
+          webRun.scheduler?.cancel()
+          void sessionRef.current?.abort()
+          sessionRef.current = undefined
+          freezeRecordingClock()
+          setRecording(false)
+        })
+        webRun.preview?.update('')
+        updateTranscription(sessionId, { inlinePreview: webRun.preview !== undefined })
+      }
+    }
+    const updateWebPreview = (): void => {
+      if (webRun === undefined || webRunRef.current !== webRun || controller.signal.aborted) return
+      if (webRun.scheduler !== undefined) webRun.scheduler.update(currentFinalText(), interimText)
+      else webRun.preview?.update(joinRecognitionSegments([currentFinalText(), interimText], prefs.lang))
+    }
+
+    const finishWeb = async (transcript: string, allowAutomaticSend: boolean): Promise<void> => {
+      const run = webRun
+      if (run === undefined || webRunRef.current !== run) return
+      let text = transcript
+      let polishFailed = false
+      if (run.scheduler !== undefined) {
+        updateTranscription(sessionId, { phase: 'polishing', status: '正在整理中',
+          hint: run.preview !== undefined ? '正在整理本次录音的文字'
+            : allowAutomaticSend ? '初步转写不是最终结果；完成后将直接发送' : '初步转写不是最终结果；完成后将写入输入框', interimText: '' })
+        try { text = await run.scheduler.finish(transcript) } catch {
+          polishFailed = true
+        }
+      } else if (prefs.modelPolishEnabled) polishFailed = true
+      if (webRunRef.current !== run || controller.signal.aborted || run.editing) return
+      if (draftRef.current !== run.draft) { run.cancel(); return }
+      run.preview?.dispose()
+      run.scheduler?.cancel()
+      webRunRef.current = undefined
+      if (polishFailed && startTriggerRef.current === 'composer-hold') {
+        showTransientMessage('润色未完成', '输入框内容保持不变，请重试', true)
+        return
+      }
+      const inserted = insertTranscript(text, false, run.insertion)
+      if (!inserted) return
+      // Only finalized success can exercise the existing explicit-stop permission.
+      if (allowAutomaticSend && !polishFailed) actionsRef.current.submit()
+      showTransientMessage(polishFailed ? '润色未完成' : run.scheduler ? '已润色完成' : '已转写完成',
+        polishFailed ? '原始转写已写入输入框，请检查后发送'
+          : run.scheduler ? allowAutomaticSend ? '最终结果已直接发送' : '最终结果已写入输入框'
+            : allowAutomaticSend ? '转写结果已直接发送' : '转写结果已写入输入框，请检查后发送', polishFailed)
+    }
 
     activeProviderRef.current = providerId
     if (localMode) {
@@ -988,6 +1116,8 @@ export function VoiceInputButton({
       terms: (cachedTerms ?? []) as readonly AsrContextTerm[],
       signal: controller.signal,
       onStart: () => {
+        if (controller.signal.aborted || ended) return
+        ensureWebRun()
         clearMessageTimer()
         clearPermissionStatusTimer()
         setPreparing(false)
@@ -1015,7 +1145,18 @@ export function VoiceInputButton({
           action: null,
         })
       },
+      onSnapshot: (finals, interim) => {
+        if (controller.signal.aborted || ended || localMode) return
+        snapshotSeen = true
+        finalSegments.splice(0, finalSegments.length, ...finals)
+        interimText = joinRecognitionSegments(interim, prefs.lang)
+        updateWebPreview()
+        updateTranscription(sessionId, { finalText: currentFinalText(), interimText })
+      },
       onInterim: (text) => {
+        if (controller.signal.aborted || ended || snapshotSeen) return
+        interimText = text
+        updateWebPreview()
         if (countdownActiveRef.current && !finalizingRef.current) {
           updateTranscription(sessionId, {
             finalText: currentFinalText(),
@@ -1031,7 +1172,10 @@ export function VoiceInputButton({
         })
       },
       onFinal: (text) => {
+        if (controller.signal.aborted || ended || snapshotSeen) return
         if (text.trim() !== '') finalSegments.push(text)
+        interimText = ''
+        updateWebPreview()
         const showStableText = !localMode || finalizingRef.current
         if (countdownActiveRef.current && !finalizingRef.current) {
           updateTranscription(sessionId, {
@@ -1050,6 +1194,7 @@ export function VoiceInputButton({
         })
       },
       onStatus: (status) => {
+        if (controller.signal.aborted || ended) return
         if (status !== 'stopping') return
         setRecording(false)
         setPreparing(localMode)
@@ -1068,6 +1213,7 @@ export function VoiceInputButton({
         })
       },
       onProgress: (progress) => {
+        if (controller.signal.aborted || ended) return
         if (progress.message === undefined) return
         if (progress.phase === 'microphone') return
         if (countdownActiveRef.current && !finalizingRef.current) return
@@ -1101,11 +1247,21 @@ export function VoiceInputButton({
         })
       },
       onError: (error) => {
+        if (controller.signal.aborted || ended) return
+        if (webRun !== undefined) {
+          const transcript = currentFinalText()
+          webRun.cancel()
+          if (transcript !== '' && startTriggerRef.current !== 'composer-hold') {
+            insertTranscript(transcript, false, webRun.insertion)
+          }
+        }
         clearPermissionStatusTimer()
         failedRef.current = true
         showTransientMessage('转写未完成', error.message, true)
       },
       onEnd: (reason) => {
+        if (controller.signal.aborted || ended) return
+        if (webRun !== undefined && reason === 'abort') { webRun.cancel(); return }
         freezeRecordingClock()
         clearPermissionStatusTimer()
         ended = true
@@ -1117,15 +1273,17 @@ export function VoiceInputButton({
         setHoldActive(false)
         const insertion = holdCompletionRef.current
         holdCompletionRef.current = undefined
-        const allowAutomaticSend = insertion === undefined
+        const allowAutomaticSend = startTriggerRef.current !== 'composer-hold' && insertion === undefined
           && reason === 'stop' && finalizingRef.current
           && !automaticStopRef.current && prefs.autoSendEnabled
         finalizingRef.current = false
         automaticStopRef.current = false
         const transcript = currentFinalText().trim()
         if (transcript !== '') {
-          void finishTranscript(transcript, allowAutomaticSend, insertion)
+          if (webRun !== undefined) void finishWeb(transcript, allowAutomaticSend)
+          else void finishTranscript(transcript, allowAutomaticSend, insertion)
         } else if (!failedRef.current && reason !== 'abort') {
+          webRun?.cancel()
           showTransientMessage('转写未完成', '没有识别到语音，请重试', true)
         } else if (reason === 'abort' && !failedRef.current) {
           resetTranscription(sessionId)
@@ -1148,6 +1306,8 @@ export function VoiceInputButton({
       }
     }
     const rejectSession = (error: unknown): void => {
+      const cancelled = controller.signal.aborted
+      webRun?.cancel()
       clearPermissionStatusTimer()
       holdCompletionRef.current = undefined
       setHoldActive(false)
@@ -1155,7 +1315,7 @@ export function VoiceInputButton({
       activeProviderRef.current = undefined
       setRecording(false)
       setPreparing(false)
-      if (controller.signal.aborted) {
+      if (cancelled) {
         resetTranscription(sessionId)
         return
       }
@@ -1164,6 +1324,7 @@ export function VoiceInputButton({
 
     const beginProvider = (): void => {
       try {
+        ensureWebRun()
         const started = provider.start(startOptions)
         const pending = started as Partial<Promise<AsrProviderSession>>
         if (typeof pending.then === 'function') {
@@ -1317,7 +1478,7 @@ export function VoiceInputButton({
       const pointerId = event.pointerId ?? 0
       if (button !== 0 || event.isPrimary === false || candidate !== undefined
         || sessionRef.current !== undefined || startAbortRef.current !== undefined
-        || finalizingRef.current) return
+        || finalizingRef.current || webRunRef.current !== undefined) return
       const insertion = captureComposerInsertion(target, draftRef.current)
       if (insertion === undefined) return
       if (insertion.start === 0 && insertion.end === insertion.draft.length && insertion.start !== insertion.end) {
@@ -1398,6 +1559,7 @@ export function VoiceInputButton({
       if (!(target instanceof HTMLElement)) return false
       const isContentEditableTextbox = target.getAttribute('contenteditable') === 'true'
         && target.getAttribute('role') === 'textbox'
+        || target.hasAttribute('data-dictate-composer-preview')
       const isAcceptedComposer = target instanceof HTMLTextAreaElement || isContentEditableTextbox
       return isAcceptedComposer
         && target === document.activeElement

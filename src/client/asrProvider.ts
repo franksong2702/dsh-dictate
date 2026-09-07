@@ -45,6 +45,8 @@ export interface AsrProviderError {
 /** Event callbacks shared by speech-recognition providers. */
 export interface AsrProviderCallbacks {
   readonly onStart?: () => void
+  /** Full browser result list, including revisions at existing result indices. */
+  readonly onSnapshot?: (finals: readonly string[], interim: readonly string[]) => void
   readonly onInterim?: (text: string) => void
   readonly onFinal?: (text: string) => void
   readonly onStatus?: (status: AsrProviderStatus) => void

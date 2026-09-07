@@ -592,6 +592,9 @@ export function SettingsPanel({
             </label>
             <p style={{ margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
               所选模型会根据当前 Session 和 Composer 提取相关词汇，提高语音识别和转写润色的准确度。
+              {prefs.transcriptionProvider === 'web-speech'
+                ? '录音停顿时会提前整理文字，尝试减少结束后的等待；可能增加模型用量。'
+                : ''}
             </p>
             {prefs.modelPolishEnabled ? (
               modelOptions.length === 0 ? (

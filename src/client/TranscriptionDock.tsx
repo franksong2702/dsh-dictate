@@ -59,6 +59,7 @@ function phaseIndicatorColor(snapshot: TranscriptionSnapshot): string {
 }
 
 function transcriptPreview(snapshot: TranscriptionSnapshot): ReactNode {
+  if (snapshot.inlinePreview) return null
   if (snapshot.finalText === '' && snapshot.interimText === '') return null
   const label = snapshot.phase === 'listening' || snapshot.phase === 'preparing'
     ? '实时识别（非最终）：'

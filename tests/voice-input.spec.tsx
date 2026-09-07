@@ -598,7 +598,8 @@ describe('Contextual Dictation browser plugin', () => {
     ]} />)
     fireEvent.click(screen.getByRole('button', { name: '展开：上下文语音输入' }))
 
-    expect(screen.getByText('所选模型会根据当前 Session 和 Composer 提取相关词汇，提高语音识别和转写润色的准确度。')).not.toBeNull()
+    expect(screen.getByText(/所选模型会根据当前 Session 和 Composer 提取相关词汇，提高语音识别和转写润色的准确度。/)).not.toBeNull()
+    expect(screen.getByText(/可能增加模型用量/)).not.toBeNull()
     expect((screen.getByRole('checkbox', { name: '启用模型润色' }) as HTMLInputElement).checked).toBe(false)
     expect(screen.queryByLabelText('润色模型')).toBeNull()
 
@@ -1434,7 +1435,7 @@ describe('Contextual Dictation browser plugin', () => {
     expect(composer.placeholder).not.toBe(COMPOSER_HOLD_TO_TALK_PROMPT)
   })
 
-  it('starts only after the hold threshold, previews above Composer, and inserts at the caret without sending', () => {
+  it('starts only after the hold threshold, previews inside Composer, and inserts at the caret without sending', () => {
     updatePrefs({ composerHoldToTalkEnabled: true, autoSendEnabled: true })
     const setDraft = vi.fn()
     const submit = vi.fn()
@@ -1458,7 +1459,9 @@ describe('Contextual Dictation browser plugin', () => {
       recognition?.onstart?.()
       recognition?.emitResults({ text: '实时内容', final: false })
     })
-    expect(document.querySelector('[data-transcription-preview]')?.textContent).toContain('实时内容')
+    expect(document.querySelector('[data-dictate-composer-preview]')?.textContent).toBe('前文实时内容后文')
+    expect(document.querySelector('[data-dictate-provisional]')?.textContent).toBe('实时内容')
+    expect(document.querySelector('[data-transcription-preview]')).toBeNull()
     expect(setDraft).not.toHaveBeenCalled()
 
     fireEvent.pointerUp(composer, { button: 0, pointerId: 1, isPrimary: true })
@@ -2072,7 +2075,146 @@ describe('Contextual Dictation browser plugin', () => {
     expect(screen.getByRole('status').textContent).toContain('正在听写中')
   })
 
-  it('automatically sends the original transcript when model polishing fails', async () => {
+  it.each(['textarea', 'contenteditable'])('progressively polishes inside %s and commits only on stop', async kind => {
+    updatePrefs({ modelPolishEnabled: true, selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }) })
+    const polish = vi.fn(async () => '1. 修改登录页面。\n2. 补充测试。')
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    const props = { inputActions: { setDraft, submit }, input: { draft: '' }, sessionId: `progressive-${kind}`, polish }
+    render(kind === 'textarea' ? voiceComposer(props) : contentEditableVoiceComposer(props))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => {
+      recognition?.onstart?.()
+      recognition?.emitResults({ text: '第一修改登录页面第二补充测试', final: true })
+    })
+    expect(document.querySelector('[data-dictate-provisional]')?.textContent).toBe('第一修改登录页面第二补充测试')
+    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    expect(document.querySelector('[data-dictate-provisional]')?.textContent).toBe('1. 修改登录页面。\n2. 补充测试。')
+    expect(setDraft).not.toHaveBeenCalled()
+    expect(submit).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-transcription-preview]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    await act(async () => { recognition?.onend?.() })
+    expect(polish).toHaveBeenCalledTimes(1)
+    expect(setDraft).toHaveBeenCalledWith('1. 修改登录页面。\n2. 补充测试。')
+    expect(document.querySelector('[data-dictate-composer-preview]')).toBeNull()
+    expect(screen.getByRole('textbox', { name: 'Composer' })).toBeTruthy()
+  })
+
+  it('replaces revised recognition at the same index and keeps preceding final text with nonzero resultIndex', () => {
+    const setDraft = vi.fn()
+    render(voiceComposer({ inputActions: { setDraft, submit: vi.fn() }, input: { draft: '' }, sessionId: 'revisions' }))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.emitResults({ text: '根目录', final: true }, { text: '错字', final: false }) })
+    act(() => {
+      const results = [
+        Object.assign([{ transcript: '根目录' }], { isFinal: true }),
+        Object.assign([{ transcript: '配置' }], { isFinal: false }),
+      ]
+      recognition?.onresult?.({ resultIndex: 1, results } as unknown as WebkitSpeechRecognitionEvent)
+    })
+    expect(document.querySelector('[data-dictate-provisional]')?.textContent).toBe('根目录配置')
+    act(() => { recognition?.emitResults({ text: '跟目录', final: true }, { text: '配置', final: true }) })
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => { recognition?.onend?.() })
+    expect(setDraft).toHaveBeenCalledWith('跟目录配置')
+  })
+
+  it('preserves manual edits and ignores a pending polish after the user edits the inline text', async () => {
+    updatePrefs({ modelPolishEnabled: true, selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }), autoSendEnabled: true })
+    let resolve!: (text: string) => void
+    const polish = vi.fn(() => new Promise<string>(done => { resolve = done }))
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    render(voiceComposer({ inputActions: { setDraft, submit }, input: { draft: '' }, sessionId: 'manual-edit', polish }))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.emitResults({ text: '第一修改登录页面第二补充测试', final: true }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    const preview = document.querySelector<HTMLElement>('[data-dictate-composer-preview]')!
+    act(() => { preview.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, inputType: 'insertText', data: '修改' })) })
+    preview.textContent = '用户手动写的内容'
+    fireEvent.input(preview)
+    await act(async () => { resolve('迟到的润色结果'); recognition?.onend?.() })
+    expect(setDraft).toHaveBeenCalledExactlyOnceWith('用户手动写的内容')
+    expect(submit).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-dictate-composer-preview]')).toBeNull()
+  })
+
+  it('waits for IME composition to end without replacing the active composition with late model text', async () => {
+    updatePrefs({ modelPolishEnabled: true, selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }) })
+    let resolve!: (text: string) => void
+    const polish = vi.fn(() => new Promise<string>(done => { resolve = done }))
+    const setDraft = vi.fn()
+    render(voiceComposer({ inputActions: { setDraft, submit: vi.fn() }, input: { draft: '' }, sessionId: 'ime-preview', polish }))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => { FakeRecognition.instances[0]?.emitResults({ text: '第一修改登录页面第二补充测试', final: true }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    const preview = document.querySelector<HTMLElement>('[data-dictate-composer-preview]')!
+    fireEvent.compositionStart(preview)
+    preview.textContent = '正在组词'
+    fireEvent.input(preview)
+    await act(async () => { resolve('不应覆盖组词') })
+    expect(preview.textContent).toBe('正在组词')
+    expect(setDraft).not.toHaveBeenCalled()
+    fireEvent.compositionEnd(preview)
+    expect(setDraft).toHaveBeenCalledExactlyOnceWith('正在组词')
+  })
+
+  it('blocks Enter from submitting provisional text and Escape restores the original draft', () => {
+    const setDraft = vi.fn()
+    const submit = vi.fn()
+    render(<div onKeyDown={e => { if (e.key === 'Enter') submit() }}>
+      {voiceComposer({ inputActions: { setDraft, submit }, input: { draft: '原文' }, sessionId: 'escape-preview' })}
+    </div>)
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => { FakeRecognition.instances[0]?.emitResults({ text: '临时文字', final: true }) })
+    const preview = document.querySelector<HTMLElement>('[data-dictate-composer-preview]')!
+    fireEvent.keyDown(preview, { key: 'Enter' })
+    expect(submit).not.toHaveBeenCalled()
+    fireEvent.keyDown(preview, { key: 'Escape' })
+    expect(setDraft).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-dictate-composer-preview]')).toBeNull()
+    act(() => { FakeRecognition.instances[0]?.finishWith('迟到的文字') })
+    expect(setDraft).not.toHaveBeenCalled()
+  })
+
+  it('cancels pending finalization on session switch', async () => {
+    updatePrefs({ modelPolishEnabled: true, selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }) })
+    let resolve!: (text: string) => void
+    const polish = vi.fn(() => new Promise<string>(done => { resolve = done }))
+    const setDraft = vi.fn()
+    const props = { inputActions: { setDraft, submit: vi.fn() }, input: { draft: '' }, sessionId: 'old-session', polish }
+    const mounted = render(voiceComposer(props))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    act(() => { FakeRecognition.instances[0]?.finishWith('原始内容') })
+    mounted.rerender(voiceComposer({ ...props, sessionId: 'new-session' }))
+    await act(async () => { resolve('旧会话结果') })
+    expect(setDraft).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-dictate-composer-preview]')).toBeNull()
+  })
+
+  it('preserves an external draft change while speculative polishing is pending', async () => {
+    updatePrefs({ modelPolishEnabled: true, selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }) })
+    let resolve!: (text: string) => void
+    const polish = vi.fn(() => new Promise<string>(done => { resolve = done }))
+    const setDraft = vi.fn()
+    const props = { inputActions: { setDraft, submit: vi.fn() }, input: { draft: '' }, sessionId: 'external-edit', polish }
+    const mounted = render(voiceComposer(props))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    const recognition = FakeRecognition.instances[0]
+    act(() => { recognition?.emitResults({ text: '第一修改登录页面第二补充测试', final: true }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    mounted.rerender(voiceComposer({ ...props, input: { draft: '外部修改' } }))
+    await act(async () => { resolve('迟到的结果'); recognition?.onstart?.(); recognition?.onend?.() })
+    expect(setDraft).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-dictate-composer-preview]')).toBeNull()
+  })
+
+  it('preserves the original transcript without sending when progressive model polishing fails', async () => {
     updatePrefs({
       autoSendEnabled: true,
       modelPolishEnabled: true,
@@ -2096,9 +2238,9 @@ describe('Contextual Dictation browser plugin', () => {
     await act(async () => { recognition?.finishWith('原始转写') })
 
     expect(setDraft).toHaveBeenCalledWith('原始转写')
-    expect(submit).toHaveBeenCalledOnce()
+    expect(submit).not.toHaveBeenCalled()
     expect(screen.getByRole('alert').textContent).toContain('润色未完成')
-    expect(screen.getByRole('alert').textContent).toContain('原始转写已直接发送')
+    expect(screen.getByRole('alert').textContent).toContain('原始转写已写入输入框')
     expect(document.querySelector('[data-transcription-final]')).toBeNull()
   })
 })
