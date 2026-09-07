@@ -87,7 +87,7 @@ interface VoiceInputProps {
     readonly phase?: 'plain' | 'adjudicating' | 'claimed' | 'submitting'
   }
   readonly sessionId: string
-  readonly polish?: (request: PolishClientRequest, signal: AbortSignal) => Promise<string>
+  readonly polish?: (request: PolishClientRequest, signal: AbortSignal) => Promise<PolishClientResponse>
   readonly loadContextTerms?: (
     request: ContextTermsRequest,
     signal: AbortSignal,
@@ -109,6 +109,39 @@ interface PolishClientRequest {
   readonly model: string
   readonly transcript: string
   readonly terms: readonly ContextTerm[]
+}
+
+/** Server-supplied, content-free timing for one model polish request. */
+interface PolishTiming {
+  readonly contextMs: number
+  readonly modelFirstOutputMs: number | null
+  readonly modelGenerationMs: number | null
+  readonly modelTotalMs: number
+  readonly totalMs: number
+}
+
+interface PolishClientResult {
+  readonly text: string
+  readonly timing?: PolishTiming
+}
+
+type PolishClientResponse = string | PolishClientResult
+
+function validTiming(value: unknown): value is PolishTiming {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<Record<keyof PolishTiming, unknown>>
+  return Number.isFinite(candidate.contextMs) && Number.isFinite(candidate.modelTotalMs)
+    && Number.isFinite(candidate.totalMs)
+    && (candidate.modelFirstOutputMs === null || Number.isFinite(candidate.modelFirstOutputMs))
+    && (candidate.modelGenerationMs === null || Number.isFinite(candidate.modelGenerationMs))
+}
+
+function polishText(value: PolishClientResponse): PolishClientResult {
+  const candidate = typeof value === 'string' ? { text: value } : value
+  if (candidate.text.trim() === '') throw new Error('model polish returned an invalid result')
+  return validTiming(candidate.timing)
+    ? { text: candidate.text.trim(), timing: candidate.timing }
+    : { text: candidate.text.trim() }
 }
 
 interface ModelReference {
@@ -300,7 +333,7 @@ export function apply(ctx: ClientContext): void {
       label: `${model.name} · ${group.name}`,
     })))
   }
-  const polish = async (request: PolishClientRequest, signal: AbortSignal): Promise<string> => {
+  const polish = async (request: PolishClientRequest, signal: AbortSignal): Promise<PolishClientResult> => {
     const result = await connection.rpc.call('/dictate', 'polish', request, signal)
     if (!result.ok) throw new Error(result.error.message)
     const value = result.value
@@ -309,7 +342,10 @@ export function apply(ctx: ClientContext): void {
       || (value as { text: string }).text.trim() === '') {
       throw new Error('model polish returned an invalid result')
     }
-    return (value as { text: string }).text.trim()
+    const candidate = value as { text: string; timing?: unknown }
+    return validTiming(candidate.timing)
+      ? { text: candidate.text.trim(), timing: candidate.timing }
+      : { text: candidate.text.trim() }
   }
   const loadContextTerms = async (
     request: ContextTermsRequest,
@@ -463,6 +499,7 @@ export function VoiceInputButton({
     stoppedAt?: number
     recognitionEndedAt?: number
     prepareToStop: () => void
+    lastPolishTiming?: PolishTiming
     cancel: () => void
   }>()
   draftRef.current = input.draft
@@ -854,12 +891,13 @@ export function VoiceInputButton({
     polishAbortRef.current = controller
     try {
       const terms = termsForPolish(selected)
-      const text = await polish({
+      const response = polishText(await polish({
         sessionId,
         ...selected,
         transcript,
         terms,
-      }, controller.signal)
+      }, controller.signal))
+      const text = response.text
       if (controller.signal.aborted) return
       if (!insertTranscript(text, allowAutomaticSend, insertion)) return
       showTransientMessage(
@@ -1033,8 +1071,13 @@ export function VoiceInputButton({
         },
         scheduler: !prefs.modelPolishEnabled || route === undefined || polish === undefined ? undefined
           : new ProgressivePolish({
-            polish: (raw, signal) => polish({ sessionId, ...route, transcript: raw,
-              terms: contextTermsRef.current }, signal),
+            polish: async (raw, signal) => {
+              const response = polishText(await polish({ sessionId, ...route, transcript: raw,
+                terms: contextTermsRef.current }, signal))
+              // A provider can settle after abort; that timing must not replace the final request's report.
+              if (!signal.aborted && validTiming(response.timing)) webRun!.lastPolishTiming = response.timing
+              return response.text
+            },
             join: parts => joinRecognitionSegments(parts, prefs.lang),
             preview: renderPreview,
           }),
@@ -1100,6 +1143,7 @@ export function VoiceInputButton({
           recognitionDrainMs: (run.recognitionEndedAt ?? completedAt) - run.stoppedAt,
           postRecognitionWaitMs: completedAt - (run.recognitionEndedAt ?? completedAt),
           polishFailed,
+          ...(run.lastPolishTiming === undefined ? {} : { serverPolish: run.lastPolishTiming }),
           ...(run.scheduler?.metrics ?? {}),
         }))
       }

@@ -2200,7 +2200,15 @@ describe('Contextual Dictation browser plugin', () => {
   it('starts the full interim polish on stop before recognition onend and reports content-free phase timings', async () => {
     updatePrefs({ modelPolishEnabled: true, selectedModel: encodeModelReference({ provider: 'deepseek', model: 'chat' }) })
     const timing = vi.spyOn(console, 'info').mockImplementation(() => {})
-    const polish = vi.fn(() => new Promise<string>(resolve => setTimeout(() => resolve('周五下午三点开会。'), 800)))
+    const serverPolish = {
+      contextMs: 12,
+      modelFirstOutputMs: 180,
+      modelGenerationMs: 608,
+      modelTotalMs: 788,
+      totalMs: 800,
+    }
+    const polish = vi.fn(() => new Promise<{ text: string; timing: typeof serverPolish }>(resolve =>
+      setTimeout(() => resolve({ text: '周五下午三点开会。', timing: serverPolish }), 800)))
     const setDraft = vi.fn()
     const submit = vi.fn()
     render(voiceComposer({ inputActions: { setDraft, submit }, input: { draft: '' }, sessionId: 'stop-overlap', polish }))
@@ -2218,7 +2226,7 @@ describe('Contextual Dictation browser plugin', () => {
     expect(submit).not.toHaveBeenCalled()
     const report = timing.mock.calls.find(call => call[0] === '[dsh-dictate:performance]')?.[1]
     expect(JSON.parse(report)).toMatchObject({ stopToFinalMs: 800, recognitionDrainMs: 500,
-      postRecognitionWaitMs: 300, stopCalls: 1, finalCalls: 0, reused: 'in-flight' })
+      postRecognitionWaitMs: 300, stopCalls: 1, finalCalls: 0, reused: 'in-flight', serverPolish })
     expect(report).not.toContain('周五')
     expect(report).not.toContain('stop-overlap')
     timing.mockRestore()

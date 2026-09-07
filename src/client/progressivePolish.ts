@@ -14,6 +14,8 @@ export interface ProgressivePolishMetrics {
   stopCalls: number
   finalCalls: number
   inputCharacters: number
+  /** Abort signals sent for superseded, finished, or cancelled speculative work. */
+  abortSignals: number
   lastRequestMs: number | null
   reused: 'none' | 'completed' | 'in-flight'
 }
@@ -22,6 +24,7 @@ export interface ProgressivePolishMetrics {
 export class ProgressivePolish {
   readonly metrics: ProgressivePolishMetrics = {
     backgroundCalls: 0, stopCalls: 0, finalCalls: 0, inputCharacters: 0, lastRequestMs: null, reused: 'none',
+    abortSignals: 0,
   }
   private raw = ''
   private interim = ''
@@ -80,7 +83,7 @@ export class ProgressivePolish {
     if (this.metrics.backgroundCalls >= (this.options.maxBackgroundCalls ?? 12)
       || this.metrics.inputCharacters + snapshot.length > (this.options.maxBackgroundCharacters ?? 48_000)) return
     if (atStop) {
-      this.pending?.controller.abort()
+      this.abortPending()
       this.pending = undefined
       this.metrics.stopCalls += 1
     }
@@ -109,7 +112,7 @@ export class ProgressivePolish {
         // Retry a failed speculative request once through the ordinary final path.
       }
     }
-    this.pending?.controller.abort()
+    this.abortPending()
     this.pending = undefined
     this.metrics.finalCalls += 1
     return this.request(raw)
@@ -118,7 +121,7 @@ export class ProgressivePolish {
   cancel(): void {
     this.cancelled = true
     this.clearTimer()
-    this.pending?.controller.abort()
+    this.abortPending()
     this.pending = undefined
     this.completed = undefined
   }
@@ -135,6 +138,14 @@ export class ProgressivePolish {
   private clearTimer(): void {
     if (this.timer !== undefined) clearTimeout(this.timer)
     this.timer = undefined
+  }
+
+  /** Signal the RPC chain, rather than merely ignoring a stale browser result. */
+  private abortPending(): void {
+    if (this.pending !== undefined && !this.pending.controller.signal.aborted) {
+      this.pending.controller.abort()
+      this.metrics.abortSignals += 1
+    }
   }
 
   private request(raw: string): Promise<string> {

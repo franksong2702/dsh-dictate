@@ -119,6 +119,7 @@ describe('progressive transcript polish', () => {
     current.resolve('修复登录，补测试和文档。')
     expect(await result).toBe('修复登录，补测试和文档。')
     expect(polish).toHaveBeenCalledTimes(2)
+    expect(run.metrics.abortSignals).toBe(1)
     expect(run.metrics.finalCalls).toBe(0)
   })
 
@@ -216,6 +217,7 @@ describe('progressive transcript polish', () => {
     run.update(raw, '')
     await vi.advanceTimersByTimeAsync(900)
     run.cancel()
+    expect(run.metrics.abortSignals).toBe(1)
     pending.resolve(cleaned)
     await vi.advanceTimersByTimeAsync(10_000)
     expect(preview).not.toHaveBeenCalledWith(cleaned)
