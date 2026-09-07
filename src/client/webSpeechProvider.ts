@@ -6,6 +6,7 @@ import {
   type AsrProviderCallbacks,
   type AsrProviderSession,
   type AsrProviderStartOptions,
+  type AsrTermsStatus,
 } from './asrProvider.ts'
 
 function recognitionConstructor(): WebkitSpeechRecognitionConstructor | undefined {
@@ -16,14 +17,14 @@ function recognitionConstructor(): WebkitSpeechRecognitionConstructor | undefine
 function applyTerms(
   recognition: WebkitSpeechRecognition,
   terms: readonly AsrContextTerm[],
-): boolean {
+): AsrTermsStatus {
   const Phrase = window.SpeechRecognitionPhrase
-  if (Phrase === undefined || recognition.phrases === undefined) return false
+  if (Phrase === undefined || recognition.phrases === undefined) return terms.length === 0 ? 'empty' : 'unsupported'
   try {
     recognition.phrases = terms.map(term => new Phrase(term.text, term.boost))
-    return true
+    return terms.length === 0 ? 'empty' : 'submitted'
   } catch {
-    return false
+    return 'rejected'
   }
 }
 
@@ -81,7 +82,10 @@ export function createWebSpeechProvider(): AsrProvider {
         next.continuous = true
         next.interimResults = true
         next.maxAlternatives = 1
-        phraseBiasActive = usePhrases && activeTerms.length > 0 && applyTerms(next, activeTerms)
+        const termsStatus = usePhrases ? applyTerms(next, activeTerms)
+          : activeTerms.length === 0 ? 'empty' : 'rejected'
+        phraseBiasActive = termsStatus === 'submitted'
+        options.onTermsStatus?.(termsStatus)
         next.onstart = () => {
           if (recognition !== next || ended || requestedEnd !== undefined) return
           if (!started) {
@@ -121,6 +125,7 @@ export function createWebSpeechProvider(): AsrProvider {
           if (recognition !== next || ended || requestedEnd === 'abort') return
           if (event.error === 'aborted' || event.error === 'no-speech') return
           if (event.error === 'phrases-not-supported') {
+            options.onTermsStatus?.('rejected')
             if (phraseBiasActive && !retriedWithoutPhrases) {
               retriedWithoutPhrases = true
               restartingWithoutPhrases = true
@@ -183,9 +188,14 @@ export function createWebSpeechProvider(): AsrProvider {
           await endedPromise
         },
         async updateTerms(terms: readonly AsrContextTerm[]): Promise<void> {
+          if (ended || requestedEnd !== undefined) return
           activeTerms = terms
           if (recognition !== undefined && !retriedWithoutPhrases) {
-            phraseBiasActive = applyTerms(recognition, terms)
+            const termsStatus = applyTerms(recognition, terms)
+            phraseBiasActive = termsStatus === 'submitted'
+            options.onTermsStatus?.(termsStatus)
+          } else if (retriedWithoutPhrases) {
+            options.onTermsStatus?.('rejected')
           }
         },
       }

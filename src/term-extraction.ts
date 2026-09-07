@@ -16,6 +16,7 @@ import {
   type ContextTermSource,
 } from './terms.ts'
 import { selectPolishContext } from './polish.ts'
+import { rememberSessionVocabulary, resetSessionVocabulary, sessionVocabulary } from './session-vocabulary.ts'
 
 /** Maximum model output accepted for temporary terminology extraction. */
 export const TERM_EXTRACTION_MAX_OUTPUT_TOKENS = 256
@@ -23,7 +24,7 @@ export const TERM_EXTRACTION_MAX_OUTPUT_TOKENS = 256
 export const TERM_EXTRACTION_MODEL_TERM_LIMIT = 16
 /** Maximum time spent on one optional model terminology request. */
 export const TERM_EXTRACTION_TIMEOUT_MS = 15_000
-/** Maximum settled terminology results retained by the host. */
+/** Maximum settled model-only terminology results retained by the host. */
 export const TERM_EXTRACTION_CACHE_LIMIT = 32
 /** Maximum in-flight terminology requests retained by the host. */
 export const TERM_EXTRACTION_IN_FLIGHT_LIMIT = 32
@@ -70,6 +71,7 @@ function boundedSet<T>(map: Map<string, T>, key: string, value: T, limit: number
 export function resetTermExtractionCache(): void {
   settledCache.clear()
   inFlight.clear()
+  resetSessionVocabulary()
 }
 
 function routeKey(route: ContextTermsModelRoute | undefined): readonly [string, string] | [] {
@@ -84,10 +86,9 @@ function cacheKey(input: {
   return JSON.stringify([input.sessionId, input.sources, routeKey(input.route)])
 }
 
-function visibleSources(session: ReturnType<SessionStore['get']>, draft: string): ContextTermSource[] {
-  if (session === undefined) return [{ text: draft, source: 'composer' }]
+function visibleSources(messages: readonly Message[], draft: string): ContextTermSource[] {
   return [
-    ...selectPolishContext(session.deriveMessages()).map(message => ({
+    ...selectPolishContext(messages).map(message => ({
       text: message.text,
       source: 'session' as const,
     })),
@@ -264,21 +265,25 @@ export async function extractContextTermsForRequest(
   const sessionId = SessionId(request.sessionId)
   const session = host.sessions.get(sessionId)
   if (session === undefined) throw new Error(`session not found: ${request.sessionId}`)
-  const sources = visibleSources(session, request.draft)
-  const rules = extractContextTerms(sources)
+  const messages = session.deriveMessages()
+  const sources = visibleSources(messages, request.draft)
+  const remembered = sessionVocabulary(request.sessionId, messages)
+  const rules = mergeTerms(remembered, extractContextTerms(sources))
+  const retain = (terms: readonly ContextTerm[]): ContextTerm[] => {
+    rememberSessionVocabulary(request.sessionId, [...terms, ...remembered])
+    return mergeTerms(remembered, terms)
+  }
   const key = cacheKey({ sessionId: request.sessionId, sources, route: request.model })
   const cached = settledCache.get(key)
-  if (cached !== undefined || settledCache.has(key)) return [...(cached ?? [])]
+  if (cached !== undefined || settledCache.has(key)) return retain(mergeTerms(rules, cached ?? []))
   if (request.model === undefined) {
-    const result = [...rules]
-    boundedSet(settledCache, key, result, TERM_EXTRACTION_CACHE_LIMIT)
-    return result
+    return retain(rules)
   }
 
   const existing = inFlight.get(key)
   if (existing !== undefined) {
     try {
-      return [...await abortable(existing, signal)]
+      return retain(mergeTerms(rules, await abortable(existing, signal)))
     } catch (error) {
       if (signal?.aborted) throw error
       return [...rules]
@@ -293,15 +298,16 @@ export async function extractContextTermsForRequest(
       inferred = await extractWithModel(host.llm, input, signal)
     } catch (error) {
       if (signal?.aborted) throw error
-      return [...rules]
+      return []
     }
-    const result = mergeTerms(rules, inferred)
-    boundedSet(settledCache, key, result, TERM_EXTRACTION_CACHE_LIMIT)
-    return result
+    // Cache only source-grounded model entities. History rules are rebuilt on
+    // every request, so an unchanged recent window cannot resurrect a deleted old term.
+    boundedSet(settledCache, key, inferred, TERM_EXTRACTION_CACHE_LIMIT)
+    return inferred
   })()
   inFlight.set(key, operation)
   try {
-    return [...await abortable(operation, signal)]
+    return retain(mergeTerms(rules, await abortable(operation, signal)))
   } catch (error) {
     if (signal?.aborted) throw error
     return [...rules]

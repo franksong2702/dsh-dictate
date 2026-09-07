@@ -314,6 +314,32 @@ describe('model context-term extraction', () => {
     resetTermExtractionCache()
   })
 
+  it('returns old session vocabulary without a model and drops it after its source is deleted', async () => {
+    const old = message('user', { kind: 'user' }, [{ type: 'text', text: 'VoxSpark 使用 `whisper`' }])
+    const recent = Array.from({ length: 10 }, () => message('user', { kind: 'user' }, [{ type: 'text', text: '继续讨论界面' }]))
+    let messages = [old, ...recent]
+    const stream = vi.fn(() => chunks('{"terms":[]}'))
+    const ctx = { sessions: { get: () => ({ deriveMessages: () => messages }) }, llm: { stream } }
+    const request = { sessionId: 'older-terms', draft: '', includeInferred: true }
+    const result = await extractContextTermsForRequest(ctx as never, request)
+    expect(result.map(term => term.text)).toEqual(expect.arrayContaining(['VoxSpark', 'whisper']))
+    expect(stream).not.toHaveBeenCalled()
+    // The recent six messages and Composer cache key are identical; the source deletion must still invalidate old terms.
+    messages = recent
+    expect(await extractContextTermsForRequest(ctx as never, request)).toEqual([])
+  })
+
+  it('keeps a model-confirmed lowercase session term after it leaves the model context window', async () => {
+    let messages = [message('user', { kind: 'user' }, [{ type: 'text', text: 'the engine is sherpa' }])]
+    const stream = vi.fn(() => chunks('{"terms":["sherpa"]}'))
+    const ctx = { sessions: { get: () => ({ deriveMessages: () => messages }) }, llm: { stream } }
+    const request = { sessionId: 'lowercase-term', draft: '', includeInferred: true }
+    await extractContextTermsForRequest(ctx as never, { ...request, model: { provider: 'p', model: 'm' } })
+    messages = [...messages, ...Array.from({ length: 10 }, () => message('user', { kind: 'user' }, [{ type: 'text', text: '继续讨论' }]))]
+    expect((await extractContextTermsForRequest(ctx as never, request)).map(term => term.text)).toContain('sherpa')
+    expect(stream).toHaveBeenCalledTimes(1)
+  })
+
   it('extracts unquoted Chinese terms, rejects hallucinations, and assigns Composer provenance', async () => {
     const stream = vi.fn(() => chunks('{"terms":["量子织网","幻觉专名","DeepSeek"]}'))
     const ctx = {

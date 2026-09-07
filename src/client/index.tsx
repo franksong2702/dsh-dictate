@@ -6,6 +6,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { SettingsPanel, type ModelOption } from './SettingsPanel.tsx'
+import { progressiveContextTermsLoader, type ContextTermsLoader } from './contextTermsLoader.ts'
+import { VocabularyDetails, type VocabularyView } from './VocabularyDetails.tsx'
 import {
   formatRecordingDuration,
   TRANSCRIPTION_COMPLETE_VISIBLE_MS,
@@ -88,10 +90,7 @@ interface VoiceInputProps {
   }
   readonly sessionId: string
   readonly polish?: (request: PolishClientRequest, signal: AbortSignal) => Promise<PolishClientResponse>
-  readonly loadContextTerms?: (
-    request: ContextTermsRequest,
-    signal: AbortSignal,
-  ) => Promise<readonly ContextTerm[]>
+  readonly loadContextTerms?: ContextTermsLoader
   readonly checkLocalEndpoint?: (endpoint: string, signal: AbortSignal) => Promise<string>
   /** Test seam and future host override for the two user-selectable routes. */
   readonly providers?: Partial<Record<'web-speech' | 'local-endpoint', AsrProvider>>
@@ -253,6 +252,9 @@ export function captureComposerInsertion(target: ComposerTextbox, draft: string)
     start = target.selectionStart
     end = target.selectionEnd
   } else {
+    // Opening vocabulary can leave selection outside the editor. An actually
+    // empty editor still has exactly one safe insertion point on the first hold.
+    if (draft === '' && target.textContent === '') return { draft, start: 0, end: 0 }
     const selection = window.getSelection()
     if (selection === null || selection.rangeCount === 0) {
       return draft === '' ? { draft, start: 0, end: 0 } : undefined
@@ -347,7 +349,7 @@ export function apply(ctx: ClientContext): void {
       ? { text: candidate.text.trim(), timing: candidate.timing }
       : { text: candidate.text.trim() }
   }
-  const loadContextTerms = async (
+  const loadContextTerms = progressiveContextTermsLoader(async (
     request: ContextTermsRequest,
     signal: AbortSignal,
   ): Promise<readonly ContextTerm[]> => {
@@ -358,7 +360,7 @@ export function apply(ctx: ClientContext): void {
       throw new Error('context terms returned an invalid result')
     }
     return parseContextTerms((value as { readonly terms?: unknown }).terms)
-  }
+  })
   const testEndpoint = (endpoint: string, signal: AbortSignal): Promise<string> =>
     checkLocalEndpointHealth(endpoint, signal)
   const callLocalService = async (
@@ -478,6 +480,9 @@ export function VoiceInputButton({
   const finalizingStartedAtRef = useRef<number>()
   const polishAbortRef = useRef<AbortController>()
   const contextTermsRef = useRef<readonly ContextTerm[]>([])
+  const [vocabularyView, setVocabularyView] = useState<VocabularyView>({
+    sessionId, terms: [], pending: false, failed: false, recognition: 'unchecked',
+  })
   const contextTermsKeyRef = useRef<string>()
   const termsDebounceTimerRef = useRef<number>()
   const termsRequestRef = useRef<{
@@ -537,12 +542,24 @@ export function VoiceInputButton({
     if (current?.key === key) return current.promise
     current?.controller.abort()
     const controller = new AbortController()
-    const promise = loadContextTerms(request, controller.signal).then((terms) => {
+    setVocabularyView(view => ({ ...view, sessionId, pending: true, failed: false }))
+    const publishTerms = (terms: readonly ContextTerm[], pending: boolean): void => {
       if (!controller.signal.aborted) {
+        const changed = JSON.stringify(contextTermsRef.current) !== JSON.stringify(terms)
         contextTermsRef.current = terms
         contextTermsKeyRef.current = key
+        if (changed) webRunRef.current?.scheduler?.invalidateContext()
+        setVocabularyView(view => ({ ...view, sessionId, terms, pending, failed: false }))
+        // Partial rule terms must reach a recording that started before model extraction completed.
+        void sessionRef.current?.updateTerms(terms)
       }
+    }
+    const promise = loadContextTerms(request, controller.signal, terms => publishTerms(terms, true)).then((terms) => {
+      publishTerms(terms, false)
       return terms
+    }, error => {
+      if (!controller.signal.aborted) setVocabularyView(view => ({ ...view, pending: false, failed: true }))
+      throw error
     })
     const requestState = { key, controller, promise }
     termsRequestRef.current = requestState
@@ -746,6 +763,7 @@ export function VoiceInputButton({
     termsRequestRef.current = undefined
     contextTermsRef.current = []
     contextTermsKeyRef.current = undefined
+    setVocabularyView({ sessionId, terms: [], pending: false, failed: false, recognition: 'unchecked' })
     finalizingRef.current = false
     automaticStopRef.current = false
     finalizingStartedAtRef.current = undefined
@@ -1012,6 +1030,8 @@ export function VoiceInputButton({
       termsRequestRef.current = undefined
     }
     if (cachedTerms === undefined) contextTermsRef.current = []
+    setVocabularyView({ sessionId, terms: cachedTerms ?? [], pending: shouldLoadContextTerms,
+      failed: false, recognition: 'unchecked' })
 
     let providerId = prefs.transcriptionProvider
     let localMode = providerId === 'local-endpoint'
@@ -1179,6 +1199,10 @@ export function VoiceInputButton({
 
     const startOptions: AsrProviderStartOptions = {
       lang: prefs.lang,
+      onTermsStatus: recognition => {
+        if (controller.signal.aborted || ended) return
+        setVocabularyView(view => ({ ...view, sessionId, recognition }))
+      },
       terms: (cachedTerms ?? []) as readonly AsrContextTerm[],
       signal: controller.signal,
       onStart: () => {
@@ -1667,6 +1691,11 @@ export function VoiceInputButton({
 
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {shouldLoadContextTerms ? <VocabularyDetails key={sessionId}
+        view={vocabularyView.sessionId === sessionId ? vocabularyView
+          : { sessionId, terms: [], pending: true, failed: false, recognition: 'unchecked' }}
+        polishEnabled={prefs.modelPolishEnabled}
+        local={(activeProviderRef.current ?? prefs.transcriptionProvider) === 'local-endpoint'} /> : null}
       <button
         ref={buttonRef}
         type="button"
