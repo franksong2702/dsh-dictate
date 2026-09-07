@@ -97,7 +97,17 @@ try {
     assert.equal(message.rpcId, 'source-smoke')
     return message.result
   }
-  assert.deepEqual(await authenticated('polish', { sessionId: 'smoke', provider: 'fixture', model: 'fixture', transcript: '原始转写', terms: [] }), { ok: true, value: { text: '润色结果' } })
+  const polished = await authenticated('polish', { sessionId: 'smoke', provider: 'fixture', model: 'fixture', transcript: '原始转写', terms: [] })
+  assert.equal(polished.ok, true)
+  assert.equal(polished.value.text, '润色结果')
+  assert.deepEqual(Object.keys(polished.value).sort(), ['text', 'timing'])
+  assert.deepEqual(Object.keys(polished.value.timing).sort(), [
+    'contextMs', 'modelFirstOutputMs', 'modelGenerationMs', 'modelTotalMs', 'totalMs',
+  ].sort())
+  for (const value of Object.values(polished.value.timing)) {
+    assert(Number.isFinite(value) && value >= 0, 'Successful fixture timings must be nonnegative numbers')
+  }
+  checks.push('polish response preserves text and exposes only bounded numeric timing fields')
   assert.equal((await authenticated('polish', {})).ok, false)
   assert.deepEqual(await authenticated('terms', { sessionId: 'smoke', draft: '在 `Codex` 中输入', includeInferred: false }), { ok: true, value: { terms: [{ text: 'Codex', boost: 5, source: 'composer' }] } })
   assert.deepEqual(await authenticated('local-service-autostart-status', {}), { ok: true, value: { enabled: false, origin: '' } })
