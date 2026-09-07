@@ -1,4 +1,11 @@
 /** Speculative full-transcript polishing. Raw recognition is always authoritative. */
+/**
+ * Short enough to start during a natural breath, while the 4-second spacing and
+ * per-recording budgets below keep continuous recognition from becoming one RPC
+ * per hypothesis.
+ */
+export const DEFAULT_PROGRESSIVE_PAUSE_MS = 350
+
 export interface ProgressivePolishOptions {
   readonly polish: (raw: string, signal: AbortSignal) => Promise<string>
   readonly preview: (text: string) => void
@@ -67,7 +74,7 @@ export class ProgressivePolish {
     if (this.cancelled || this.finishing || this.stopping) return
     const snapshot = this.snapshot()
     if (snapshot.length < 8 || snapshot === this.lastAttempt) return
-    const wait = Math.max(this.options.pauseMs ?? 900,
+    const wait = Math.max(this.options.pauseMs ?? DEFAULT_PROGRESSIVE_PAUSE_MS,
       this.lastStarted + (this.options.intervalMs ?? 4000) - Date.now())
     this.timer = setTimeout(() => {
       this.timer = undefined

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ProgressivePolish } from '../src/client/progressivePolish.ts'
+import { DEFAULT_PROGRESSIVE_PAUSE_MS, ProgressivePolish } from '../src/client/progressivePolish.ts'
 
 const raw = '第一修改登录页面第二补充测试'
 const cleaned = '1. 修改登录页面。\n2. 补充测试。'
@@ -20,7 +20,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn(async () => cleaned)
     const run = new ProgressivePolish({ polish, preview, join })
     run.update(raw, '')
-    await vi.advanceTimersByTimeAsync(899)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS - 1)
     expect(polish).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(preview).toHaveBeenLastCalledWith(cleaned)
@@ -34,7 +34,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn(() => response.promise)
     const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
     run.update(raw, '')
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     const result = run.finish(raw)
     response.resolve(cleaned)
     expect(await result).toBe(cleaned)
@@ -47,7 +47,7 @@ describe('progressive transcript polish', () => {
     const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
     // Web Speech can leave the whole utterance interim until stop/onend.
     run.update('', raw)
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     expect(polish).toHaveBeenCalledWith(raw, expect.any(AbortSignal))
     expect(await run.finish(raw)).toBe(cleaned)
     expect(polish).toHaveBeenCalledTimes(1)
@@ -76,7 +76,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn(async (text: string) => text)
     const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
     run.update('', '预算二十万周四开会')
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     run.prepareToStop()
     expect(await run.finish('预算十八万周五开会')).toBe('预算十八万周五开会')
     expect(polish.mock.calls.map(call => call[0])).toEqual(['预算二十万周四开会', '预算十八万周五开会'])
@@ -87,7 +87,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn(async (text: string) => text)
     const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
     run.update('', raw)
-    await vi.advanceTimersByTimeAsync(800)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS - 100)
     run.update(raw, '')
     await vi.advanceTimersByTimeAsync(100)
     expect(polish).toHaveBeenCalledTimes(1)
@@ -110,7 +110,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
     const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
     run.update('', raw)
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     run.update('', `${raw}第三条补充文档`)
     run.prepareToStop()
     expect(polish.mock.calls[0]?.[1].aborted).toBe(true)
@@ -127,7 +127,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn(async (text: string) => text === raw ? cleaned : '只修改登录页面，不补测试。')
     const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
     run.update(raw, '')
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     const corrected = `${raw}不对第二条取消`
     run.update(corrected, '')
     expect(await run.finish(corrected)).toBe('只修改登录页面，不补测试。')
@@ -139,7 +139,7 @@ describe('progressive transcript polish', () => {
     const preview = vi.fn()
     const run = new ProgressivePolish({ polish: async () => cleaned, preview, join })
     run.update(raw, '')
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     run.update(raw, '还有')
     expect(preview).toHaveBeenLastCalledWith(`${cleaned}还有`)
     run.update('首先修复退出页面', '还有')
@@ -153,7 +153,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn((text: string) => text === raw ? earlier.promise : Promise.resolve('最终版本'))
     const run = new ProgressivePolish({ polish, preview, join })
     run.update(raw, '')
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     const result = run.finish(`${raw}第三补充文档`)
     expect(await result).toBe('最终版本')
     earlier.resolve('迟到的旧结果')
@@ -170,7 +170,7 @@ describe('progressive transcript polish', () => {
       await vi.advanceTimersByTimeAsync(100)
     }
     expect(polish).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     expect(polish).toHaveBeenCalledTimes(1)
     run.update(`${raw}第三补充文档`, '')
     await vi.advanceTimersByTimeAsync(6000)
@@ -202,7 +202,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(cleaned)
     const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
     run.update(raw, '')
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     const result = run.finish(raw)
     pending.reject(new Error('temporary failure'))
     expect(await result).toBe(cleaned)
@@ -215,7 +215,7 @@ describe('progressive transcript polish', () => {
     const polish = vi.fn(() => pending.promise)
     const run = new ProgressivePolish({ polish, preview, join })
     run.update(raw, '')
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESSIVE_PAUSE_MS)
     run.cancel()
     expect(run.metrics.abortSignals).toBe(1)
     pending.resolve(cleaned)
@@ -236,9 +236,9 @@ describe('progressive transcript polish', () => {
 
   it.each([
     { scenario: 'completed', stopAt: 2000, tail: false, expected: 0, calls: 1 },
-    { scenario: 'in-flight', stopAt: 1200, tail: false, expected: 500, calls: 1 },
+    { scenario: 'in-flight', stopAt: 650, tail: false, expected: 500, calls: 1 },
     { scenario: 'changed-at-stop', stopAt: 2000, tail: true, expected: 800, calls: 2 },
-    { scenario: 'no-pause', stopAt: 400, tail: false, expected: 800, calls: 1 },
+    { scenario: 'no-pause', stopAt: 300, tail: false, expected: 800, calls: 1 },
   ])('controlled replay: $scenario', async ({ scenario, stopAt, tail, expected, calls }) => {
     // Scheduling evidence only: 800 ms simulated model, fixed synthetic input, no real inference.
     vi.setSystemTime(0)

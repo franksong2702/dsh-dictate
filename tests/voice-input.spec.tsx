@@ -2089,7 +2089,7 @@ describe('Contextual Dictation browser plugin', () => {
       recognition?.emitResults({ text: '第一修改登录页面第二补充测试', final: true })
     })
     expect(document.querySelector('[data-dictate-provisional]')?.textContent).toBe('第一修改登录页面第二补充测试')
-    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(350) })
     expect(document.querySelector('[data-dictate-provisional]')?.textContent).toBe('1. 修改登录页面。\n2. 补充测试。')
     expect(setDraft).not.toHaveBeenCalled()
     expect(submit).not.toHaveBeenCalled()
@@ -2132,7 +2132,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
     const recognition = FakeRecognition.instances[0]
     act(() => { recognition?.emitResults({ text: '第一修改登录页面第二补充测试', final: true }) })
-    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(350) })
     const preview = document.querySelector<HTMLElement>('[data-dictate-composer-preview]')!
     act(() => { preview.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, inputType: 'insertText', data: '修改' })) })
     preview.textContent = '用户手动写的内容'
@@ -2151,7 +2151,7 @@ describe('Contextual Dictation browser plugin', () => {
     render(voiceComposer({ inputActions: { setDraft, submit: vi.fn() }, input: { draft: '' }, sessionId: 'ime-preview', polish }))
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
     act(() => { FakeRecognition.instances[0]?.emitResults({ text: '第一修改登录页面第二补充测试', final: true }) })
-    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(350) })
     const preview = document.querySelector<HTMLElement>('[data-dictate-composer-preview]')!
     fireEvent.compositionStart(preview)
     preview.textContent = '正在组词'
@@ -2242,7 +2242,7 @@ describe('Contextual Dictation browser plugin', () => {
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
     const recognition = FakeRecognition.instances[0]
     act(() => { recognition?.emitResults({ text: '第一修改登录页面第二补充测试', final: true }) })
-    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(350) })
     mounted.rerender(voiceComposer({ ...props, input: { draft: '外部修改' } }))
     await act(async () => { resolve('迟到的结果'); recognition?.onstart?.(); recognition?.onend?.() })
     expect(setDraft).not.toHaveBeenCalled()
