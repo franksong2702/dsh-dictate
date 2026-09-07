@@ -192,7 +192,12 @@ export function extractContextTerms(sources: readonly ContextTermSource[]): Cont
           add(sequence.join(' '), sourceIndex, false, sequence.length)
         }
       }
-      if (/[A-Z0-9._+#/-]/.test(current[0])) add(current[0], sourceIndex, false, 1)
+      // Lowercase product/engine names inside Chinese speech are useful too.
+      // Do not promote every word from an ordinary English paragraph.
+      const start = current.index ?? 0
+      const adjacentToChinese = /\p{Script=Han}\s*$/u.test(source.slice(Math.max(0, start - 16), start))
+        || /^\s*\p{Script=Han}/u.test(source.slice(start + current[0].length, start + current[0].length + 16))
+      if (/[A-Z0-9._+#/-]/.test(current[0]) || adjacentToChinese) add(current[0], sourceIndex, false, 1)
     }
   }
 

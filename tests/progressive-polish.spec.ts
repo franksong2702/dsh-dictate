@@ -253,6 +253,32 @@ describe('progressive transcript polish', () => {
     large.cancel()
   })
 
+  it('does not reuse completed polish with obsolete vocabulary when raw speech is unchanged', async () => {
+    const polish = vi.fn().mockResolvedValueOnce('扣代克斯').mockResolvedValue('Codex')
+    const run = new ProgressivePolish({ polish, preview: vi.fn(), join })
+    run.update(raw, '')
+    await vi.advanceTimersByTimeAsync(350)
+    run.invalidateContext()
+    expect(await run.finish(raw)).toBe('Codex')
+    expect(polish).toHaveBeenCalledTimes(2)
+    expect(run.metrics.reused).toBe('none')
+  })
+
+  it('aborts old-hint speculation without accepting its late output', async () => {
+    const old = deferred<string>()
+    const preview = vi.fn()
+    const polish = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue('Codex')
+    const run = new ProgressivePolish({ polish, preview, join })
+    run.update(raw, '')
+    await vi.advanceTimersByTimeAsync(350)
+    run.invalidateContext()
+    expect(polish.mock.calls[0]?.[1].aborted).toBe(true)
+    old.resolve('扣代克斯')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(preview).not.toHaveBeenCalledWith('扣代克斯')
+    expect(await run.finish(raw)).toBe('Codex')
+  })
+
   it('retries an exact failed speculative request once at finalization', async () => {
     const pending = deferred<string>()
     const polish = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(cleaned)

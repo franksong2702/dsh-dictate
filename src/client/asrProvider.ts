@@ -43,8 +43,12 @@ export interface AsrProviderError {
 }
 
 /** Event callbacks shared by speech-recognition providers. */
+export type AsrTermsStatus = 'empty' | 'submitted' | 'unsupported' | 'rejected'
+
 export interface AsrProviderCallbacks {
   readonly onStart?: () => void
+  /** Local API acceptance only; not proof of recognition-service use or accuracy. */
+  readonly onTermsStatus?: (status: AsrTermsStatus) => void
   /** Full browser result list, including revisions at existing result indices. */
   readonly onSnapshot?: (finals: readonly string[], interim: readonly string[]) => void
   readonly onInterim?: (text: string) => void

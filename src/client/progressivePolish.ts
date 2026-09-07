@@ -61,6 +61,20 @@ export class ProgressivePolish {
     this.schedule()
   }
 
+  /** New vocabulary during speech invalidates polish produced with the old hints.
+   * Once stopping, do not extend finalization for optional enrichment that arrived late.
+   */
+  invalidateContext(): void {
+    if (this.cancelled || this.finishing || this.stopping) return
+    this.completed = undefined
+    this.lastAttempt = ''
+    this.clearTimer()
+    this.abortPending()
+    this.pending = undefined
+    this.render()
+    this.schedule()
+  }
+
   /** Overlap recognition shutdown with one speculative pass of the latest words. */
   prepareToStop(): void {
     if (this.cancelled || this.finishing || this.stopping) return

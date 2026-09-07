@@ -19,6 +19,7 @@ import {
 } from '../src/client/index.tsx'
 import { loadPrefs, normalizePrefs, updatePrefs } from '../src/client/prefs.ts'
 import type { ContextTerm } from '../src/terms.ts'
+import { progressiveContextTermsLoader } from '../src/client/contextTermsLoader.ts'
 import type { AsrProvider, AsrProviderStartOptions } from '../src/client/asrProvider.ts'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -130,6 +131,7 @@ describe('Contextual Dictation browser plugin', () => {
 
   afterEach(() => {
     cleanup()
+    window.getSelection()?.removeAllRanges()
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
     window.SpeechRecognition = undefined
@@ -1188,6 +1190,7 @@ describe('Contextual Dictation browser plugin', () => {
         model: { provider: 'deepseek', model: 'chat' },
       },
       expect.any(AbortSignal),
+      expect.any(Function),
     )
     expect(recognition?.phrases).toEqual([
       new FakeSpeechRecognitionPhrase('DeepSeek Harness', 6),
@@ -1283,6 +1286,55 @@ describe('Contextual Dictation browser plugin', () => {
     expect(recognition?.phrases).toEqual([
       new FakeSpeechRecognitionPhrase('DeepSeek Harness', 6),
     ])
+  })
+
+  it('shows and injects rule terms while model enrichment is pending, then reports rejection', async () => {
+    window.SpeechRecognitionPhrase = FakeSpeechRecognitionPhrase
+    updatePrefs({ mixedLanguageOptimizationEnabled: true, modelPolishEnabled: true,
+      selectedModel: encodeModelReference({ provider: 'p', model: 'm' }) })
+    const rules: readonly ContextTerm[] = [{ text: 'VoxSpark', boost: 5, source: 'session' }]
+    let resolve!: (terms: readonly ContextTerm[]) => void
+    const model = new Promise<readonly ContextTerm[]>(yes => { resolve = yes })
+    const load = vi.fn().mockResolvedValueOnce(rules).mockReturnValueOnce(model)
+    render(voiceSurfaces({ inputActions: { setDraft: vi.fn(), submit: vi.fn() }, input: { draft: '' },
+      sessionId: 'partial-terms', loadContextTerms: progressiveContextTermsLoader(load) }))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    await act(async () => { await Promise.resolve() })
+    const recognition = FakeRecognition.instances[0]!
+    expect(recognition.phrases.map(phrase => phrase.phrase)).toEqual(['VoxSpark'])
+    const details = document.querySelector<HTMLDetailsElement>('[data-dictate-vocabulary]')!
+    expect(details.open).toBe(false)
+    fireEvent.click(screen.getByText('词'))
+    expect(details.open).toBe(true)
+    expect(screen.getByRole('region', { name: '当前会话关键词' }).textContent).toContain('VoxSpark')
+    expect(details.textContent).toContain('正在补充关键词')
+    expect(details.textContent).toContain('关键词已传给浏览器')
+    await act(async () => { resolve([...rules, { text: 'sherpa', boost: 5, source: 'session' }]) })
+    expect(recognition.phrases.map(phrase => phrase.phrase)).toEqual(['VoxSpark', 'sherpa'])
+    expect(details.textContent).toContain('sherpa')
+    act(() => { recognition.onerror?.({ error: 'phrases-not-supported' } as WebkitSpeechRecognitionErrorEvent) })
+    expect(details.textContent).toContain('浏览器拒绝了关键词提示')
+    fireEvent.keyDown(details, { key: 'Escape' })
+    expect(details.open).toBe(false)
+    expect(document.activeElement).toBe(details.querySelector('summary'))
+  })
+
+  it('does not expose a previous session vocabulary or accept its late model result after switching', async () => {
+    updatePrefs({ mixedLanguageOptimizationEnabled: true, modelPolishEnabled: true,
+      selectedModel: encodeModelReference({ provider: 'p', model: 'm' }) })
+    let resolve!: (terms: readonly ContextTerm[]) => void
+    const oldModel = new Promise<readonly ContextTerm[]>(yes => { resolve = yes })
+    const load = vi.fn().mockResolvedValueOnce([{ text: 'OldTerm', boost: 5, source: 'session' }])
+      .mockReturnValueOnce(oldModel)
+    const props = { inputActions: { setDraft: vi.fn(), submit: vi.fn() }, input: { draft: '' },
+      loadContextTerms: progressiveContextTermsLoader(load) }
+    const mounted = render(voiceSurfaces({ ...props, sessionId: 'old-vocabulary' }))
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    await act(async () => { await Promise.resolve() })
+    expect(document.querySelector('[data-dictate-vocabulary]')?.textContent).toContain('OldTerm')
+    mounted.rerender(voiceSurfaces({ ...props, sessionId: 'new-vocabulary' }))
+    await act(async () => { resolve([{ text: 'LateOldTerm', boost: 5, source: 'session' }]) })
+    expect(document.querySelector('[data-dictate-vocabulary]')?.textContent).not.toContain('OldTerm')
   })
 
   it('refreshes a cached phrase list after start without blocking recognition', async () => {
@@ -1563,6 +1615,16 @@ describe('Contextual Dictation browser plugin', () => {
     const composer = screen.getByRole('textbox', { name: COMPOSER_HOLD_TO_TALK_PROMPT })
     expect(composer.getAttribute('data-placeholder')).toBe(COMPOSER_HOLD_TO_TALK_PROMPT)
 
+    // A vocabulary disclosure (or another control) can own focus/selection before this first hold.
+    const outside = document.createElement('span')
+    outside.textContent = '外部说明'
+    document.body.append(outside)
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(outside)
+    selection.removeAllRanges()
+    selection.addRange(range)
+
     fireEvent.pointerDown(composer, { button: 0, pointerId: 5, isPrimary: true })
     act(() => { vi.advanceTimersByTime(COMPOSER_HOLD_TO_TALK_MS) })
     const recognition = FakeRecognition.instances[0]
@@ -1574,6 +1636,7 @@ describe('Contextual Dictation browser plugin', () => {
     act(() => { recognition?.finishWith('空白写入') })
 
     expect(setDraft).toHaveBeenCalledWith('空白写入')
+    outside.remove()
   })
 
   it('replaces a whole selection in the Alpha.3 contenteditable Composer', () => {
