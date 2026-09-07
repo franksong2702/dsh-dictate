@@ -51,6 +51,22 @@ export interface PolishRequest {
 /** Exact client result returned after a successful model call. */
 export interface PolishResult {
   readonly text: string
+  /** Content-free server timings for one request; no transcript or route data. */
+  readonly timing: PolishTiming
+}
+
+/** Timings that identify where a completed polish request spent time. */
+export interface PolishTiming {
+  /** Reading and bounding the session context plus building the model input. */
+  readonly contextMs: number
+  /** From starting the model stream until its first returned chunk. */
+  readonly modelFirstOutputMs: number | null
+  /** From first returned chunk until the stream completed. */
+  readonly modelGenerationMs: number | null
+  /** Complete model-stream lifetime, including any provider queue. */
+  readonly modelTotalMs: number
+  /** The complete host RPC work after validation. */
+  readonly totalMs: number
 }
 
 const encoder = new TextEncoder()
@@ -272,6 +288,7 @@ export async function polishTranscript(
   request: PolishRequest,
   signal?: AbortSignal,
 ): Promise<PolishResult> {
+  const startedAt = performance.now()
   const sessionId = SessionId(request.sessionId)
   const session = ctx.sessions.get(sessionId)
   if (session === undefined) throw new Error(`session not found: ${request.sessionId}`)
@@ -283,6 +300,9 @@ export async function polishTranscript(
     source: { kind: 'plugin', plugin: 'dsh-dictate' },
     content: [{ type: 'text', text: framePolishInput(context, request.transcript, request.terms) }],
   })]
+  const contextMs = Math.round(performance.now() - startedAt)
+  const modelStartedAt = performance.now()
+  let firstOutputAt: number | undefined
   for await (const chunk of ctx.llm.stream({
     provider: request.provider,
     model: request.model,
@@ -291,7 +311,11 @@ export async function polishTranscript(
     maxTokens: polishOutputCap(request.transcript),
     sessionId,
     signal: callSignal,
-  })) assembler.push(chunk)
+  })) {
+    firstOutputAt ??= performance.now()
+    assembler.push(chunk)
+  }
+  const completedAt = performance.now()
   const failure = finishFailure(assembler.finish)
   if (failure !== undefined) throw failure
   const blocks = assembler.blocks()
@@ -305,5 +329,14 @@ export async function polishTranscript(
     .trim()
   if (text === '') throw new Error('model polish produced no text')
   assertPolishLength(request.transcript, text)
-  return { text }
+  return {
+    text,
+    timing: {
+      contextMs,
+      modelFirstOutputMs: firstOutputAt === undefined ? null : Math.round(firstOutputAt - modelStartedAt),
+      modelGenerationMs: firstOutputAt === undefined ? null : Math.round(completedAt - firstOutputAt),
+      modelTotalMs: Math.round(completedAt - modelStartedAt),
+      totalMs: Math.round(completedAt - startedAt),
+    },
+  }
 }

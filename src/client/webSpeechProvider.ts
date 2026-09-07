@@ -53,6 +53,7 @@ export function createWebSpeechProvider(): AsrProvider {
       let ended = false
       let started = false
       let activeTerms = options.terms ?? []
+      const previousFinals: string[] = []
       let resolveEnd: (() => void) | undefined
       const endedPromise = new Promise<void>((resolve) => { resolveEnd = resolve })
 
@@ -74,6 +75,7 @@ export function createWebSpeechProvider(): AsrProvider {
         if (ended || requestedEnd === 'abort') return
         const next = new Recognition()
         const emittedFinals = new Map<number, string>()
+        let latestFinals: string[] = []
         recognition = next
         next.lang = options.lang ?? 'zh-CN'
         next.continuous = true
@@ -81,6 +83,7 @@ export function createWebSpeechProvider(): AsrProvider {
         next.maxAlternatives = 1
         phraseBiasActive = usePhrases && activeTerms.length > 0 && applyTerms(next, activeTerms)
         next.onstart = () => {
+          if (recognition !== next || ended || requestedEnd !== undefined) return
           if (!started) {
             started = true
             options.onStart?.()
@@ -88,6 +91,16 @@ export function createWebSpeechProvider(): AsrProvider {
           emitAsrStatus(options, 'listening')
         }
         next.onresult = (event) => {
+          if (recognition !== next || ended || requestedEnd === 'abort') return
+          const snapshotFinals: string[] = []
+          const snapshotInterim: string[] = []
+          for (let index = 0; index < event.results.length; index += 1) {
+            const result = event.results[index]
+            const text = result?.[0]?.transcript.trim() ?? ''
+            if (text !== '') (result?.isFinal ? snapshotFinals : snapshotInterim).push(text)
+          }
+          latestFinals = snapshotFinals
+          options.onSnapshot?.([...previousFinals, ...snapshotFinals], snapshotInterim)
           const interim: string[] = []
           for (let index = event.resultIndex; index < event.results.length; index += 1) {
             const result = event.results[index]
@@ -105,7 +118,7 @@ export function createWebSpeechProvider(): AsrProvider {
           options.onInterim?.(interim.join(' '))
         }
         next.onerror = (event) => {
-          if (recognition !== next) return
+          if (recognition !== next || ended || requestedEnd === 'abort') return
           if (event.error === 'aborted' || event.error === 'no-speech') return
           if (event.error === 'phrases-not-supported') {
             if (phraseBiasActive && !retriedWithoutPhrases) {
@@ -119,6 +132,8 @@ export function createWebSpeechProvider(): AsrProvider {
         next.onend = () => {
           if (recognition !== next) return
           recognition = undefined
+          previousFinals.push(...latestFinals)
+          if (!ended && requestedEnd !== 'abort') options.onSnapshot?.(previousFinals, [])
           if (restartingWithoutPhrases && requestedEnd === undefined) {
             restartingWithoutPhrases = false
             begin(false)

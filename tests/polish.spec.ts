@@ -125,7 +125,16 @@ describe('model transcript polishing', () => {
     await expect(polishTranscript(ctx as never, {
       sessionId: 'session-1', provider: 'deepseek', model: 'chat', transcript: '深度求索哈尼斯',
       terms: [{ text: 'DeepSeek Harness', boost: 5, source: 'session' }],
-    })).resolves.toEqual({ text: 'DeepSeek Harness' })
+    })).resolves.toMatchObject({
+      text: 'DeepSeek Harness',
+      timing: {
+        contextMs: expect.any(Number),
+        modelFirstOutputMs: expect.any(Number),
+        modelGenerationMs: expect.any(Number),
+        modelTotalMs: expect.any(Number),
+        totalMs: expect.any(Number),
+      },
+    })
 
     const options = stream.mock.calls[0]?.[0]
     expect(options).toMatchObject({
@@ -158,7 +167,7 @@ describe('model transcript polishing', () => {
       sessionId: 'session-1', provider: 'deepseek', model: 'chat',
       transcript: '埃克塞斯脱肯得重新申请一下',
       terms: [],
-    })).resolves.toEqual({ text: 'Access Token 需要重新申请。' })
+    })).resolves.toMatchObject({ text: 'Access Token 需要重新申请。' })
   })
 
   it('falls back to the raw transcript when the model expands instead of polishing', async () => {
@@ -182,6 +191,27 @@ describe('model transcript polishing', () => {
       sessionId: 'session-1', provider: 'deepseek', model: 'chat', transcript: '原文',
       terms: [],
     })).rejects.toThrow('model polish produced no text')
+  })
+
+  it('passes cancellation through to the model runtime instead of only dropping a stale result', async () => {
+    const controller = new AbortController()
+    const stream = vi.fn((options: { readonly signal?: AbortSignal }) => (async function * () {
+      await new Promise<void>((_resolve, reject) => {
+        options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+      })
+      yield { type: 'finish', reason: { kind: 'stop' } } as StreamChunk
+    })())
+    const ctx = {
+      sessions: { get: vi.fn(() => ({ deriveMessages: () => [] })) },
+      llm: { stream },
+    }
+    const request = polishTranscript(ctx as never, {
+      sessionId: 'session-1', provider: 'deepseek', model: 'chat', transcript: '取消前的原文', terms: [],
+    }, controller.signal)
+    await Promise.resolve()
+    controller.abort()
+    await expect(request).rejects.toThrow('aborted')
+    expect(stream.mock.calls[0]?.[0]?.signal).toBeDefined()
   })
 
   it('registers an authenticated Connection RPC and returns the polished text', async () => {
@@ -218,7 +248,19 @@ describe('model transcript polishing', () => {
     const result = await handler?.('polish', {
       sessionId: 'session-1', provider: 'deepseek', model: 'chat', transcript: '原始转写', terms: [],
     }, signal)
-    expect(result).toEqual({ ok: true, value: { text: '润色结果' } })
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        text: '润色结果',
+        timing: {
+          contextMs: expect.any(Number),
+          modelFirstOutputMs: expect.any(Number),
+          modelGenerationMs: expect.any(Number),
+          modelTotalMs: expect.any(Number),
+          totalMs: expect.any(Number),
+        },
+      },
+    })
 
     await expect(handler?.('local-service-autostart-status', {}, signal)).resolves.toEqual({
       ok: true,

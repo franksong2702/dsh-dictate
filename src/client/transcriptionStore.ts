@@ -29,6 +29,7 @@ export interface TranscriptionSnapshot {
   readonly phase: TranscriptionPhase
   readonly finalText: string
   readonly interimText: string
+  readonly inlinePreview: boolean
   readonly status: string
   readonly hint: string
   readonly action: TranscriptionAction | null
@@ -45,6 +46,7 @@ export const EMPTY_TRANSCRIPTION: TranscriptionSnapshot = Object.freeze({
   phase: 'idle',
   finalText: '',
   interimText: '',
+  inlinePreview: false,
   status: '',
   hint: '',
   action: null,
@@ -157,6 +159,7 @@ export function updateTranscription(
     phase: patch.phase ?? previous.phase,
     finalText: patch.finalText ?? previous.finalText,
     interimText: patch.interimText ?? previous.interimText,
+    inlinePreview: patch.inlinePreview ?? previous.inlinePreview,
     status: patch.status ?? previous.status,
     hint: patch.hint ?? previous.hint,
     action: 'action' in patch ? patch.action ?? null : previous.action,
@@ -166,7 +169,7 @@ export function updateTranscription(
     announcement: patch.announcement ?? previous.announcement,
     history: nextHistory,
   }
-  if (next.phase === previous.phase && next.finalText === previous.finalText
+  if (next.inlinePreview === previous.inlinePreview && next.phase === previous.phase && next.finalText === previous.finalText
     && next.interimText === previous.interimText && next.status === previous.status
     && next.hint === previous.hint && next.action === previous.action
     && next.recordingElapsedMs === previous.recordingElapsedMs
